@@ -6,6 +6,7 @@
 - **VLG-CBM** provides a novel method to train Concept Bottleneck Models(CBMs) with guidance from both vision and language domain.
 - **VLG-CBM** provides concise and accurate concept attribution for the decision made by the model. The following figure compares decision explanation of VLG-CBM with existing methods by listing top-five contributions for their decisions.
 
+**[Update July 2025] We release our new tool for ANEC evaluation!** If you want to measure ANEC on your own model, please check out [This repository](https://github.com/windymount/ANEC-evaluator). Simply save your model's output and run one line of command to get ANEC result!
 <p align="center">
   <img src="assets/decisions.png" width="90%" alt="Decision Explanation">
 </p>
