@@ -82,7 +82,8 @@ def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
 
 def compute_net_corrections(X, y_true, original_preds, new_preds):
     """
-    Compute net corrections: instances corrected - instances broken.
+    Holistic evaluation: Compute comprehensive accuracy impact analysis.
+    Similar to manual_weight_editing.ipynb - full re-evaluation of entire dataset.
     
     Args:
         X: Features (not used, but kept for API consistency)
@@ -91,18 +92,38 @@ def compute_net_corrections(X, y_true, original_preds, new_preds):
         new_preds: Predictions after interventions [N]
     
     Returns:
-        dict with:
+        dict with comprehensive analysis:
+            - accuracy_before: overall accuracy before interventions
+            - accuracy_after: overall accuracy after interventions
+            - accuracy_delta: change in accuracy
             - total_corrected: number of instances fixed (wrong -> correct)
             - total_broken: number of instances broken (correct -> wrong)
             - net_corrections: total_corrected - total_broken
+            - per_class_accuracy_before: dict mapping class_idx -> accuracy before
+            - per_class_accuracy_after: dict mapping class_idx -> accuracy after
+            - per_class_accuracy_delta: dict mapping class_idx -> accuracy change
             - per_class_corrected: dict mapping class_idx -> count of corrections
             - per_class_broken: dict mapping class_idx -> count of breakages
             - per_class_net: dict mapping class_idx -> net corrections
             - changed_indices: list of indices where predictions changed
+            - unchanged_correct: count of samples that stayed correct
+            - unchanged_wrong: count of samples that stayed wrong
     """
+    # Overall accuracy
+    acc_before = (original_preds == y_true).float().mean().item()
+    acc_after = (new_preds == y_true).float().mean().item()
+    acc_delta = acc_after - acc_before
+    
+    # Find all changed predictions
     diff = (original_preds != new_preds)
     changed_indices = torch.nonzero(diff, as_tuple=False).view(-1).tolist()
     
+    # Count unchanged samples
+    unchanged_mask = ~diff
+    unchanged_correct = ((original_preds == y_true) & unchanged_mask).sum().item()
+    unchanged_wrong = ((original_preds != y_true) & unchanged_mask).sum().item()
+    
+    # Track corrections and breakages
     total_corrected = 0
     total_broken = 0
     per_class_corrected = {}
@@ -122,17 +143,41 @@ def compute_net_corrections(X, y_true, original_preds, new_preds):
             total_corrected += 1
             per_class_corrected[gt] = per_class_corrected.get(gt, 0) + 1
     
+    # Per-class accuracy analysis
+    num_classes = int(y_true.max().item()) + 1
+    per_class_acc_before = {}
+    per_class_acc_after = {}
+    per_class_acc_delta = {}
+    
+    for c in range(num_classes):
+        class_mask = (y_true == c)
+        if class_mask.sum() > 0:
+            acc_b = (original_preds[class_mask] == y_true[class_mask]).float().mean().item()
+            acc_a = (new_preds[class_mask] == y_true[class_mask]).float().mean().item()
+            per_class_acc_before[c] = acc_b
+            per_class_acc_after[c] = acc_a
+            per_class_acc_delta[c] = acc_a - acc_b
+    
     # Compute net per class
     all_classes = set(per_class_corrected.keys()) | set(per_class_broken.keys())
     per_class_net = {c: per_class_corrected.get(c, 0) - per_class_broken.get(c, 0) 
                      for c in all_classes}
     
     return {
+        "accuracy_before": acc_before,
+        "accuracy_after": acc_after,
+        "accuracy_delta": acc_delta,
         "total_corrected": total_corrected,
         "total_broken": total_broken,
         "net_corrections": total_corrected - total_broken,
+        "per_class_accuracy_before": per_class_acc_before,
+        "per_class_accuracy_after": per_class_acc_after,
+        "per_class_accuracy_delta": per_class_acc_delta,
         "per_class_corrected": per_class_corrected,
         "per_class_broken": per_class_broken,
         "per_class_net": per_class_net,
         "changed_indices": changed_indices,
+        "unchanged_correct": unchanged_correct,
+        "unchanged_wrong": unchanged_wrong,
+        "total_samples": len(y_true),
     }

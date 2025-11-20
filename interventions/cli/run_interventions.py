@@ -76,13 +76,23 @@ def main():
     base2 = accuracy(Xte, yte, W2, b2)
     logger.info(f"Type-4 nudged test acc: {base2:.4f}  (delta {base2-base:+.4f})  accepted_edits={len(log)}")
 
-    # Compute net corrections
-    logger.info("Computing net corrections (corrected - broken)...")
+    # Holistic re-evaluation: Full accuracy impact analysis
+    logger.info("Performing holistic re-evaluation on full test set...")
     new_preds = get_predictions(Xte, W2, b2)
     net_corrections = compute_net_corrections(Xte, yte, original_preds, new_preds)
-    logger.info(f"Net corrections: {net_corrections['total_corrected']} corrected, "
-                f"{net_corrections['total_broken']} broken, "
-                f"net: {net_corrections['net_corrections']}")
+    
+    logger.info("="*70)
+    logger.info("HOLISTIC ACCURACY IMPACT ANALYSIS")
+    logger.info("="*70)
+    logger.info(f"Overall Accuracy: {net_corrections['accuracy_before']:.4f} → {net_corrections['accuracy_after']:.4f} "
+                f"(delta: {net_corrections['accuracy_delta']:+.4f})")
+    logger.info(f"Total samples: {net_corrections['total_samples']}")
+    logger.info(f"  Corrected: {net_corrections['total_corrected']} (wrong → correct)")
+    logger.info(f"  Broken: {net_corrections['total_broken']} (correct → wrong)")
+    logger.info(f"  Net corrections: {net_corrections['net_corrections']:+d}")
+    logger.info(f"  Unchanged (correct): {net_corrections['unchanged_correct']}")
+    logger.info(f"  Unchanged (wrong): {net_corrections['unchanged_wrong']}")
+    logger.info("="*70)
 
     logger.info("Saving results...")
     save_json({"baseline_acc": base, "T3_curve": curve, "T4_acc": base2, "T4_log": log,
