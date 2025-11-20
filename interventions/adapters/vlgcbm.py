@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 import os, glob, torch
 from torch.utils.data import TensorDataset, DataLoader
+from loguru import logger
 
 @dataclass
 class VLGCbmRun:
@@ -15,18 +16,18 @@ def _load_split_tensors(run: VLGCbmRun, split: str):
     
     if not os.path.exists(feat_path):
         if split == "test":
-            # Fallback to val if test doesn't exist
+            logger.warning(f"test_concept_features.pt not found, falling back to val_concept_features.pt")
             feat_path = os.path.join(fp, "val_concept_features.pt")
             label_path = os.path.join(fp, "val_concept_labels.pt")
             if not os.path.exists(feat_path):
                 raise FileNotFoundError(f"Neither test nor val concept features found in {fp}")
-            import warnings
-            warnings.warn(f"test_concept_features.pt not found, using val_concept_features.pt instead")
         else:
             raise FileNotFoundError(f"Concept features not found: {feat_path}")
     
+    logger.info(f"Loading {split} split: {os.path.basename(feat_path)}")
     X = torch.load(feat_path, map_location="cpu")
     y = torch.load(label_path, map_location="cpu")
+    logger.info(f"  Loaded X shape: {X.shape}, y shape: {y.shape}")
     return X, y
 
 def get_loader(run: VLGCbmRun, split: str, batch_size=256, num_workers=2, shuffle=False):
@@ -44,9 +45,13 @@ def load_sparse_head(run: VLGCbmRun):
     if run.nec is None:
         raise ValueError("Specify nec to load a precomputed sparse head.")
     fp = run.load_path
-    W = torch.load(os.path.join(fp, f"W_g@NEC={run.nec}.pt"), map_location="cpu")
-    b = torch.load(os.path.join(fp, f"b_g@NEC={run.nec}.pt"), map_location="cpu")
+    w_path = os.path.join(fp, f"W_g@NEC={run.nec}.pt")
+    b_path = os.path.join(fp, f"b_g@NEC={run.nec}.pt")
+    logger.info(f"Loading sparse head: W from {os.path.basename(w_path)}, b from {os.path.basename(b_path)}")
+    W = torch.load(w_path, map_location="cpu")
+    b = torch.load(b_path, map_location="cpu")
     C, D = W.shape
+    logger.info(f"  Loaded W shape: {W.shape}, b shape: {b.shape}, num_classes: {C}")
     return W, b, C
 
 def forward_final(X, W, B):

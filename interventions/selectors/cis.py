@@ -14,7 +14,7 @@ def rank_by_cis(features: torch.Tensor, W: torch.Tensor, y_true: torch.Tensor, y
     Returns [N, topk] LongTensor.
     """
     N, D = features.shape
-    out = torch.zeros((N, topk), dtype=torch.long)
+    out = torch.zeros((N, topk), dtype=torch.long, device=features.device)
     for i in range(N):
         g = class_pair_impact(W, int(y_true[i]), int(y_pred[i]))
         out[i] = torch.topk(g, k=topk, largest=True).indices

@@ -1,5 +1,6 @@
 # interventions/evaluate/sweep.py
 import torch
+from loguru import logger
 from ..editors.concepts import apply_concept_overrides
 from ..editors.weights import nudge_final_layer, margin
 
@@ -17,17 +18,22 @@ def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
     """
     base = accuracy(X, y, W, b)
     out = {0: base}
-    # only edit misclassified samples (speed)
+    logger.info(f"Baseline accuracy: {base:.4f}")
+    
     pred = (X @ W.T + b).argmax(1)
     mis_mask = pred != y
     Xm, ym, pm = X[mis_mask], y[mis_mask], pred[mis_mask]
+    logger.info(f"Found {Xm.shape[0]} misclassified samples out of {X.shape[0]}")
 
     for k in topks:
-        idx = selector_fn(Xm, topk=k)               # [M, k]
+        logger.info(f"Computing budget curve for k={k} concept edits...")
+        idx = selector_fn(Xm, topk=k)
         X2 = apply_concept_overrides(Xm, W, b, ym, pm, idx, m_target=0.0, tau=tau)
         X_full = X.clone()
         X_full[mis_mask] = X2
-        out[k] = accuracy(X_full, y, W, b)
+        acc_k = accuracy(X_full, y, W, b)
+        out[k] = acc_k
+        logger.info(f"  k={k}: accuracy = {acc_k:.4f} (delta: {acc_k-base:+.4f})")
     return out
 
 def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
@@ -37,19 +43,30 @@ def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
     Returns possibly-updated W,b and a small log.
     """
     log = []
+    logger.info("Finding misclassified train samples...")
     logits_train = X_train @ W.T + b
     pred_train = logits_train.argmax(1)
     mis_idx = torch.nonzero(pred_train != y_train, as_tuple=False).view(-1)[:sample_limit]
+    logger.info(f"Found {len(mis_idx)} misclassified samples (limited to {sample_limit})")
 
     W2, b2 = W.clone(), b.clone()
     base_val = accuracy(X_val, y_val, W2, b2)
-    for i in mis_idx.tolist():
+    logger.info(f"Baseline val accuracy: {base_val:.4f}")
+    logger.info(f"Processing {len(mis_idx)} samples for weight nudges...")
+
+    accepted = 0
+    for idx, i in enumerate(mis_idx.tolist()):
+        if (idx + 1) % 100 == 0:
+            logger.info(f"  Processed {idx+1}/{len(mis_idx)} samples, accepted {accepted} edits")
         t, p = int(y_train[i]), int(pred_train[i])
         js = chosen_indices_fn(X_train[i:i+1], topk=1)[0].tolist()
         W_try, b_try = nudge_final_layer(W2, b2, X_train[i], t, p, js, tau=tau)
         new_val = accuracy(X_val, y_val, W_try, b_try)
-        if new_val + 1e-6 >= base_val:  # accept if no val harm
+        if new_val + 1e-6 >= base_val:
             W2, b2 = W_try, b_try
             base_val = new_val
+            accepted += 1
             log.append({"i": i, "t": t, "p": p, "js": js})
+    
+    logger.info(f"Accepted {accepted} weight nudges, final val acc: {base_val:.4f}")
     return W2, b2, log
