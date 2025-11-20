@@ -66,8 +66,12 @@ def main():
     logger.info(f"Recorded predictions for {len(original_preds)} test samples")
 
     logger.info("Starting Type-3 budget curve (concept overrides)...")
+    logger.info("  Using train set to find misclassified samples for intervention strategy")
+    logger.info("  Evaluating on test set to measure impact")
     selector = lambda X, topk: rank_uncertain_concepts(X, topk=topk, T=2.0)
-    curve = budget_curve_type3(Xte, yte, W, b, selector_fn=selector, topks=tuple(range(1, args.budget+1)), tau=args.tau_concept)
+    # Use train set to determine intervention strategy, evaluate on test set
+    curve = budget_curve_type3(Xtr, ytr, Xte, yte, W, b, selector_fn=selector, 
+                               topks=tuple(range(1, args.budget+1)), tau=args.tau_concept)
     logger.info(f"Type-3 (concept overrides) acc vs budget: {curve}")
 
     logger.info("Starting Type-4 weight nudges...")
