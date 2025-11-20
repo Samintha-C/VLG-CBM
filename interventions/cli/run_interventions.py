@@ -4,7 +4,7 @@ from loguru import logger
 from ..adapters.vlgcbm import VLGCbmRun, get_loader, load_sparse_head
 from ..selectors.entropy import rank_uncertain_concepts
 from ..selectors.confusion import top_confusions, bucket_indices
-from ..evaluate.sweep import budget_curve_type3, weight_nudge_eval, accuracy
+from ..evaluate.sweep import budget_curve_type3, weight_nudge_eval, accuracy, get_predictions, compute_net_corrections
 from ..evaluate.report import stamp_dir, save_json
 
 def main():
@@ -56,9 +56,14 @@ def main():
     Xva, yva = Xva.to(device), yva.to(device)
     Xte, yte = Xte.to(device), yte.to(device)
 
-    logger.info("Computing baseline accuracy...")
+    logger.info("Computing baseline accuracy and recording original predictions...")
     base = accuracy(Xte, yte, W, b)
     logger.info(f"Baseline test acc (NEC={args.nec}): {base:.4f}")
+    
+    # Record original predictions for net correction analysis
+    logger.info("Recording baseline predictions on test set...")
+    original_preds = get_predictions(Xte, W, b)
+    logger.info(f"Recorded predictions for {len(original_preds)} test samples")
 
     logger.info("Starting Type-3 budget curve (concept overrides)...")
     selector = lambda X, topk: rank_uncertain_concepts(X, topk=topk, T=2.0)
@@ -71,8 +76,17 @@ def main():
     base2 = accuracy(Xte, yte, W2, b2)
     logger.info(f"Type-4 nudged test acc: {base2:.4f}  (delta {base2-base:+.4f})  accepted_edits={len(log)}")
 
+    # Compute net corrections
+    logger.info("Computing net corrections (corrected - broken)...")
+    new_preds = get_predictions(Xte, W2, b2)
+    net_corrections = compute_net_corrections(Xte, yte, original_preds, new_preds)
+    logger.info(f"Net corrections: {net_corrections['total_corrected']} corrected, "
+                f"{net_corrections['total_broken']} broken, "
+                f"net: {net_corrections['net_corrections']}")
+
     logger.info("Saving results...")
     save_json({"baseline_acc": base, "T3_curve": curve, "T4_acc": base2, "T4_log": log,
+               "net_corrections": net_corrections,
                "nec": args.nec, "load_path": args.load_path}, outdir, "summary")
     logger.info(f"Results saved to {outdir}/summary.json")
 

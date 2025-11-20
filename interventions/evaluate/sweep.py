@@ -12,6 +12,15 @@ def accuracy(X, y, W, b, batch=4096):
         acc += (logits.argmax(1) == y[i:i+batch]).float().sum().item()
     return acc / X.shape[0]
 
+@torch.no_grad()
+def get_predictions(X, W, b, batch=4096):
+    """Get predictions for all samples in X. Returns tensor of class indices."""
+    preds = []
+    for i in range(0, X.shape[0], batch):
+        logits = X[i:i+batch] @ W.T + b
+        preds.append(logits.argmax(1))
+    return torch.cat(preds, dim=0)
+
 def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
     """
     Return dict: {k: acc_after_k_edits}, starting from baseline acc.
@@ -70,3 +79,60 @@ def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
     
     logger.info(f"Accepted {accepted} weight nudges, final val acc: {base_val:.4f}")
     return W2, b2, log
+
+def compute_net_corrections(X, y_true, original_preds, new_preds):
+    """
+    Compute net corrections: instances corrected - instances broken.
+    
+    Args:
+        X: Features (not used, but kept for API consistency)
+        y_true: Ground truth labels [N]
+        original_preds: Predictions before interventions [N]
+        new_preds: Predictions after interventions [N]
+    
+    Returns:
+        dict with:
+            - total_corrected: number of instances fixed (wrong -> correct)
+            - total_broken: number of instances broken (correct -> wrong)
+            - net_corrections: total_corrected - total_broken
+            - per_class_corrected: dict mapping class_idx -> count of corrections
+            - per_class_broken: dict mapping class_idx -> count of breakages
+            - per_class_net: dict mapping class_idx -> net corrections
+            - changed_indices: list of indices where predictions changed
+    """
+    diff = (original_preds != new_preds)
+    changed_indices = torch.nonzero(diff, as_tuple=False).view(-1).tolist()
+    
+    total_corrected = 0
+    total_broken = 0
+    per_class_corrected = {}
+    per_class_broken = {}
+    
+    for idx in changed_indices:
+        gt = int(y_true[idx])
+        orig_pred = int(original_preds[idx])
+        new_pred = int(new_preds[idx])
+        
+        if gt == orig_pred:
+            # Was correct, now wrong (broken)
+            total_broken += 1
+            per_class_broken[gt] = per_class_broken.get(gt, 0) + 1
+        elif gt == new_pred:
+            # Was wrong, now correct (corrected)
+            total_corrected += 1
+            per_class_corrected[gt] = per_class_corrected.get(gt, 0) + 1
+    
+    # Compute net per class
+    all_classes = set(per_class_corrected.keys()) | set(per_class_broken.keys())
+    per_class_net = {c: per_class_corrected.get(c, 0) - per_class_broken.get(c, 0) 
+                     for c in all_classes}
+    
+    return {
+        "total_corrected": total_corrected,
+        "total_broken": total_broken,
+        "net_corrections": total_corrected - total_broken,
+        "per_class_corrected": per_class_corrected,
+        "per_class_broken": per_class_broken,
+        "per_class_net": per_class_net,
+        "changed_indices": changed_indices,
+    }
