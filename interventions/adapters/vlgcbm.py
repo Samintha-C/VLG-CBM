@@ -10,8 +10,23 @@ class VLGCbmRun:
 
 def _load_split_tensors(run: VLGCbmRun, split: str):
     fp = run.load_path
-    X = torch.load(os.path.join(fp, f"{split}_concept_features.pt"), map_location="cpu")
-    y = torch.load(os.path.join(fp, f"{split}_concept_labels.pt"),  map_location="cpu")
+    feat_path = os.path.join(fp, f"{split}_concept_features.pt")
+    label_path = os.path.join(fp, f"{split}_concept_labels.pt")
+    
+    if not os.path.exists(feat_path):
+        if split == "test":
+            # Fallback to val if test doesn't exist
+            feat_path = os.path.join(fp, "val_concept_features.pt")
+            label_path = os.path.join(fp, "val_concept_labels.pt")
+            if not os.path.exists(feat_path):
+                raise FileNotFoundError(f"Neither test nor val concept features found in {fp}")
+            import warnings
+            warnings.warn(f"test_concept_features.pt not found, using val_concept_features.pt instead")
+        else:
+            raise FileNotFoundError(f"Concept features not found: {feat_path}")
+    
+    X = torch.load(feat_path, map_location="cpu")
+    y = torch.load(label_path, map_location="cpu")
     return X, y
 
 def get_loader(run: VLGCbmRun, split: str, batch_size=256, num_workers=2, shuffle=False):
