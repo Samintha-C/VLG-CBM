@@ -26,14 +26,17 @@ def main():
     te = get_loader(run, "test",  batch_size=4096)
 
     # Materialize tensors for eval simplicity
-    Xtr, ytr = next(iter(tr.dataset.tensors)), tr.dataset.tensors[1] if hasattr(tr.dataset, "tensors") else None
-    Xva, yva = next(iter(va.dataset.tensors)), va.dataset.tensors[1] if hasattr(va.dataset, "tensors") else None
-    Xte, yte = next(iter(te.dataset.tensors)), te.dataset.tensors[1] if hasattr(te.dataset, "tensors") else None
-    # If DataLoader has no .tensors, concatenate (sane for our sizes)
-    if ytr is None:
-        Xtr = torch.cat([X for X,_ in tr], 0); ytr = torch.cat([y for _,y in tr], 0)
-        Xva = torch.cat([X for X,_ in va], 0); yva = torch.cat([y for _,y in va], 0)
-        Xte = torch.cat([X for X,_ in te], 0); yte = torch.cat([y for _,y in te], 0)
+    if hasattr(tr.dataset, "tensors"):
+        Xtr, ytr = tr.dataset.tensors[0], tr.dataset.tensors[1]
+        Xva, yva = va.dataset.tensors[0], va.dataset.tensors[1]
+        Xte, yte = te.dataset.tensors[0], te.dataset.tensors[1]
+    else:
+        Xtr = torch.cat([X for X,_ in tr], 0)
+        ytr = torch.cat([y for _,y in tr], 0)
+        Xva = torch.cat([X for X,_ in va], 0)
+        yva = torch.cat([y for _,y in va], 0)
+        Xte = torch.cat([X for X,_ in te], 0)
+        yte = torch.cat([y for _,y in te], 0)
 
     # Baseline acc
     base = accuracy(Xte, yte, W, b)
