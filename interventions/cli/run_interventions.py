@@ -42,12 +42,13 @@ def main():
     tr = get_loader(run, "train", batch_size=4096)
     va = get_loader(run, "val", batch_size=4096)
     
-    # Try to load test set, but it might not exist
+    # Try to load test set, but if it doesn't exist, we'll split val set
     try:
         te = get_loader(run, "test", batch_size=4096)
         has_test = True
+        logger.info("Found separate test set")
     except FileNotFoundError:
-        logger.warning("Test set not found - will need to create separate test split")
+        logger.info("Test set not found - will split validation set into intervention and test portions")
         has_test = False
 
     logger.info("Materializing tensors...")
@@ -66,8 +67,39 @@ def main():
             Xte = torch.cat([X for X,_ in te], 0)
             yte = torch.cat([y for _,y in te], 0)
     
+    # If test set doesn't exist, split val set into intervention and test
     if not has_test:
-        raise ValueError("Test set is required but not found. Please ensure test_concept_features.pt exists.")
+        logger.info("="*70)
+        logger.info("SPLITTING VALIDATION SET:")
+        logger.info("  Original val set will be split into:")
+        logger.info("    - Val (intervention): For finding mistakes and applying interventions")
+        logger.info("    - Test: Unseen evaluation set (split from val)")
+        logger.info("="*70)
+        
+        # Split val set: 50% for interventions, 50% for test
+        n_val = len(Xva)
+        n_int = n_val // 2
+        n_test = n_val - n_int
+        
+        # Random permutation for splitting (with fixed seed for reproducibility)
+        torch.manual_seed(42)
+        indices = torch.randperm(n_val)
+        int_indices = indices[:n_int]
+        test_indices = indices[n_int:]
+        
+        Xva_int = Xva[int_indices]
+        yva_int = yva[int_indices]
+        Xte = Xva[test_indices]
+        yte = yva[test_indices]
+        
+        # Replace val with intervention portion
+        Xva, yva = Xva_int, yva_int
+        
+        logger.info(f"Split validation set ({n_val} samples):")
+        logger.info(f"  Val (intervention): {len(Xva)} samples")
+        logger.info(f"  Test (from val split): {len(Xte)} samples")
+    else:
+        logger.info("Using separate test set (not split from val)")
     
     logger.info(f"Train: {Xtr.shape[0]} samples")
     logger.info(f"Val: {Xva.shape[0]} samples (for interventions)")

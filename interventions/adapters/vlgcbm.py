@@ -15,14 +15,7 @@ def _load_split_tensors(run: VLGCbmRun, split: str):
     label_path = os.path.join(fp, f"{split}_concept_labels.pt")
     
     if not os.path.exists(feat_path):
-        if split == "test":
-            logger.warning(f"test_concept_features.pt not found, falling back to val_concept_features.pt")
-            feat_path = os.path.join(fp, "val_concept_features.pt")
-            label_path = os.path.join(fp, "val_concept_labels.pt")
-            if not os.path.exists(feat_path):
-                raise FileNotFoundError(f"Neither test nor val concept features found in {fp}")
-        else:
-            raise FileNotFoundError(f"Concept features not found: {feat_path}")
+        raise FileNotFoundError(f"Concept features not found: {feat_path}")
     
     logger.info(f"Loading {split} split: {os.path.basename(feat_path)}")
     X = torch.load(feat_path, map_location="cpu")
