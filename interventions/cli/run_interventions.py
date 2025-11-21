@@ -92,10 +92,10 @@ def main():
     logger.info(f"Baseline val (eval) acc (NEC={args.nec}): {base_val_eval:.4f}")
     logger.info(f"Baseline test acc (NEC={args.nec}): {base_test:.4f}")
     
-    # Record original predictions for net correction analysis on val_eval
-    logger.info("Recording baseline predictions on val (eval) set...")
-    original_preds = get_predictions(X_val_eval, W, b)
-    logger.info(f"Recorded predictions for {len(original_preds)} val (eval) samples")
+    # Record original predictions for net correction analysis on TEST set (truly unseen)
+    logger.info("Recording baseline predictions on TEST set (unseen data)...")
+    original_preds_test = get_predictions(Xte, W, b)
+    logger.info(f"Recorded predictions for {len(original_preds_test)} test samples")
 
     logger.info("Starting Type-3 budget curve (concept overrides)...")
     logger.info("  Pattern: Intervene on val (eval) set, evaluate on same set (holistic analysis)")
@@ -126,13 +126,13 @@ def main():
     base_test_after = accuracy(Xte, yte, W2, b2)
     logger.info(f"Test acc: {base_test:.4f} → {base_test_after:.4f} (delta: {base_test_after-base_test:+.4f})  accepted_edits={len(log)}")
 
-    # Holistic re-evaluation: Full accuracy impact analysis on val_eval
-    logger.info("Performing holistic re-evaluation on val (eval) set...")
-    new_preds = get_predictions(X_val_eval, W2, b2)
-    net_corrections = compute_net_corrections(X_val_eval, y_val_eval, original_preds, new_preds)
+    # Holistic re-evaluation: Full accuracy impact analysis on TEST set (truly unseen)
+    logger.info("Performing holistic re-evaluation on TEST set (unseen data)...")
+    new_preds_test = get_predictions(Xte, W2, b2)
+    net_corrections = compute_net_corrections(Xte, yte, original_preds_test, new_preds_test)
     
     logger.info("="*70)
-    logger.info("HOLISTIC ACCURACY IMPACT ANALYSIS")
+    logger.info("HOLISTIC ACCURACY IMPACT ANALYSIS (TEST SET - UNSEEN DATA)")
     logger.info("="*70)
     logger.info(f"Overall Accuracy: {net_corrections['accuracy_before']:.4f} → {net_corrections['accuracy_after']:.4f} "
                 f"(delta: {net_corrections['accuracy_delta']:+.4f})")
