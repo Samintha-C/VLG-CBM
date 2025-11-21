@@ -21,57 +21,50 @@ def get_predictions(X, W, b, batch=4096):
         preds.append(logits.argmax(1))
     return torch.cat(preds, dim=0)
 
-def budget_curve_type3(X_intervention, y_intervention, X_eval, y_eval, W, b, selector_fn, topks=(1,3), tau=2.0):
+def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
     """
-    Type-3 budget curve: Apply concept overrides to intervention set, evaluate on eval set.
+    Type-3 budget curve: Apply concept overrides and evaluate on the same set.
     
-    This prevents data leakage: we find misclassified samples from X_intervention (train/val),
-    apply interventions to them, but evaluate accuracy on X_eval (test).
+    Matches the manual_weight_editing.ipynb pattern:
+    - Find misclassified samples from the set
+    - Apply concept overrides to those samples
+    - Evaluate accuracy on the same set (holistic impact analysis)
+    
+    This is an analysis mode (like the manual experiment) to see the holistic
+    impact of interventions, not a rigorous train/val/test evaluation.
     
     Args:
-        X_intervention: Features to find misclassified samples from (train/val)
-        y_intervention: Labels for intervention set
-        X_eval: Features to evaluate on (test)
-        y_eval: Labels for evaluation set
+        X: Features to both intervene on and evaluate
+        y: Labels
         W, b: Sparse head weights
         selector_fn: Function to select concepts for intervention
         topks: Tuple of k values to try (e.g., (1, 2, 3))
         tau: Budget constraint for concept overrides
     
     Returns:
-        dict: {k: acc_after_k_edits}, starting from baseline acc on eval set.
+        dict: {k: acc_after_k_edits}, starting from baseline acc.
     """
-    base = accuracy(X_eval, y_eval, W, b)
+    base = accuracy(X, y, W, b)
     out = {0: base}
-    logger.info(f"Baseline accuracy on eval set: {base:.4f}")
+    logger.info(f"Baseline accuracy: {base:.4f}")
     
-    # Find misclassified samples in intervention set
-    pred_intervention = (X_intervention @ W.T + b).argmax(1)
-    mis_mask = pred_intervention != y_intervention
-    Xm, ym, pm = X_intervention[mis_mask], y_intervention[mis_mask], pred_intervention[mis_mask]
-    logger.info(f"Found {Xm.shape[0]} misclassified samples in intervention set (out of {X_intervention.shape[0]})")
+    # Find misclassified samples
+    pred = (X @ W.T + b).argmax(1)
+    mis_mask = pred != y
+    Xm, ym, pm = X[mis_mask], y[mis_mask], pred[mis_mask]
+    logger.info(f"Found {Xm.shape[0]} misclassified samples out of {X.shape[0]}")
 
     for k in topks:
         logger.info(f"Computing budget curve for k={k} concept edits...")
-        # Select concepts to edit based on intervention set
+        # Select concepts to edit
         idx = selector_fn(Xm, topk=k)
-        # Apply concept overrides to intervention set samples
+        # Apply concept overrides to misclassified samples
         X2 = apply_concept_overrides(Xm, W, b, ym, pm, idx, m_target=0.0, tau=tau)
-        
-        # For evaluation: apply same intervention pattern to eval set
-        # Find misclassified samples in eval set
-        pred_eval = (X_eval @ W.T + b).argmax(1)
-        mis_mask_eval = pred_eval != y_eval
-        Xm_eval, ym_eval, pm_eval = X_eval[mis_mask_eval], y_eval[mis_mask_eval], pred_eval[mis_mask_eval]
-        
-        # Apply same concept selection strategy to eval set
-        idx_eval = selector_fn(Xm_eval, topk=k)
-        X2_eval = apply_concept_overrides(Xm_eval, W, b, ym_eval, pm_eval, idx_eval, m_target=0.0, tau=tau)
-        
-        # Evaluate on eval set with interventions applied
-        X_eval_full = X_eval.clone()
-        X_eval_full[mis_mask_eval] = X2_eval
-        acc_k = accuracy(X_eval_full, y_eval, W, b)
+        # Create full dataset with interventions applied
+        X_full = X.clone()
+        X_full[mis_mask] = X2
+        # Evaluate on the same set (holistic impact)
+        acc_k = accuracy(X_full, y, W, b)
         out[k] = acc_k
         logger.info(f"  k={k}: accuracy = {acc_k:.4f} (delta: {acc_k-base:+.4f})")
     return out

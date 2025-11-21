@@ -35,6 +35,43 @@ def get_loader(run: VLGCbmRun, split: str, batch_size=256, num_workers=2, shuffl
     ds = TensorDataset(X, y)
     return DataLoader(ds, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, pin_memory=False)
 
+def split_validation_set(run: VLGCbmRun, intervention_ratio=0.5, seed=42):
+    """
+    Split validation set into two parts:
+    - val_intervention: For running interventions (finding mistakes, applying fixes)
+    - val_eval: For evaluating intervened model (generalization check)
+    
+    Args:
+        run: VLGCbmRun instance
+        intervention_ratio: Fraction of val set to use for interventions (default 0.5)
+        seed: Random seed for reproducibility
+    
+    Returns:
+        (X_val_int, y_val_int, X_val_eval, y_val_eval): Split validation sets
+    """
+    import torch
+    torch.manual_seed(seed)
+    
+    X_val, y_val = _load_split_tensors(run, "val")
+    n = len(X_val)
+    n_int = int(n * intervention_ratio)
+    
+    # Random permutation for splitting
+    indices = torch.randperm(n, generator=torch.Generator().manual_seed(seed))
+    int_indices = indices[:n_int]
+    eval_indices = indices[n_int:]
+    
+    X_val_int = X_val[int_indices]
+    y_val_int = y_val[int_indices]
+    X_val_eval = X_val[eval_indices]
+    y_val_eval = y_val[eval_indices]
+    
+    logger.info(f"Split validation set: {n} samples")
+    logger.info(f"  Intervention set: {len(X_val_int)} samples ({intervention_ratio:.1%})")
+    logger.info(f"  Evaluation set: {len(X_val_eval)} samples ({1-intervention_ratio:.1%})")
+    
+    return X_val_int, y_val_int, X_val_eval, y_val_eval
+
 def list_available_nec(load_path: str):
     ws = sorted(glob.glob(os.path.join(load_path, "W_g@NEC=*.pt")))
     def _nec(p): return int(os.path.basename(p).split("=")[1].split(".")[0])
