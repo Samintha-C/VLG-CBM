@@ -1,7 +1,7 @@
 # interventions/cli/run_interventions.py
 import argparse, torch
 from loguru import logger
-from ..adapters.vlgcbm import VLGCbmRun, get_loader, load_sparse_head, split_validation_set
+from ..adapters.vlgcbm import VLGCbmRun, get_loader, load_sparse_head
 from ..selectors.entropy import rank_uncertain_concepts
 from ..selectors.confusion import top_confusions, bucket_indices
 from ..evaluate.sweep import budget_curve_type3, weight_nudge_eval, accuracy, get_predictions, compute_net_corrections
@@ -16,8 +16,6 @@ def main():
     ap.add_argument("--tau_concept", type=float, default=2.0)
     ap.add_argument("--tau_weight", type=float, default=1e-2)
     ap.add_argument("--device", type=str, default=None)
-    ap.add_argument("--val_intervention_ratio", type=float, default=0.5, 
-                    help="Fraction of validation set to use for interventions (rest for evaluation)")
     args = ap.parse_args()
 
     device = args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -37,59 +35,52 @@ def main():
     logger.info("="*70)
     logger.info("DATA SPLIT STRATEGY:")
     logger.info("  Train: Training data (not used for interventions)")
-    logger.info("  Val (intervention): Find mistakes, apply interventions")
-    logger.info("  Val (eval): Evaluate intervened model (generalization check)")
-    logger.info("  Test: Final evaluation (if available)")
+    logger.info("  Val: Find mistakes, apply interventions (concept recalibration)")
+    logger.info("  Test: Pure evaluation (unseen, not used in any intervention decisions)")
     logger.info("="*70)
     
     tr = get_loader(run, "train", batch_size=4096)
-    
-    # Split validation set into intervention and evaluation portions
-    X_val_int, y_val_int, X_val_eval, y_val_eval = split_validation_set(
-        run, intervention_ratio=args.val_intervention_ratio, seed=42
-    )
+    va = get_loader(run, "val", batch_size=4096)
     
     # Try to load test set, but it might not exist
     try:
         te = get_loader(run, "test", batch_size=4096)
         has_test = True
     except FileNotFoundError:
-        logger.warning("Test set not found, will use val_eval as final evaluation set")
+        logger.warning("Test set not found - will need to create separate test split")
         has_test = False
 
     logger.info("Materializing tensors...")
     if hasattr(tr.dataset, "tensors"):
         Xtr, ytr = tr.dataset.tensors[0], tr.dataset.tensors[1]
+        Xva, yva = va.dataset.tensors[0], va.dataset.tensors[1]
         if has_test:
             Xte, yte = te.dataset.tensors[0], te.dataset.tensors[1]
     else:
         logger.info("Concatenating batches...")
         Xtr = torch.cat([X for X,_ in tr], 0)
         ytr = torch.cat([y for _,y in tr], 0)
+        Xva = torch.cat([X for X,_ in va], 0)
+        yva = torch.cat([y for _,y in va], 0)
         if has_test:
             Xte = torch.cat([X for X,_ in te], 0)
             yte = torch.cat([y for _,y in te], 0)
     
-    # Use val_eval as test if test set doesn't exist
     if not has_test:
-        Xte, yte = X_val_eval, y_val_eval
-        logger.info("Using val_eval as final evaluation set (test set not available)")
+        raise ValueError("Test set is required but not found. Please ensure test_concept_features.pt exists.")
     
     logger.info(f"Train: {Xtr.shape[0]} samples")
-    logger.info(f"Val (intervention): {X_val_int.shape[0]} samples")
-    logger.info(f"Val (eval): {X_val_eval.shape[0]} samples")
-    logger.info(f"Test: {Xte.shape[0]} samples")
+    logger.info(f"Val: {Xva.shape[0]} samples (for interventions)")
+    logger.info(f"Test: {Xte.shape[0]} samples (unseen, for evaluation only)")
     logger.info("Moving tensors to device...")
     Xtr, ytr = Xtr.to(device), ytr.to(device)
-    X_val_int, y_val_int = X_val_int.to(device), y_val_int.to(device)
-    X_val_eval, y_val_eval = X_val_eval.to(device), y_val_eval.to(device)
+    Xva, yva = Xva.to(device), yva.to(device)
     Xte, yte = Xte.to(device), yte.to(device)
 
     logger.info("Computing baseline accuracy and recording original predictions...")
-    # Compute baselines on both val_eval and test
-    base_val_eval = accuracy(X_val_eval, y_val_eval, W, b)
+    base_val = accuracy(Xva, yva, W, b)
     base_test = accuracy(Xte, yte, W, b)
-    logger.info(f"Baseline val (eval) acc (NEC={args.nec}): {base_val_eval:.4f}")
+    logger.info(f"Baseline val acc (NEC={args.nec}): {base_val:.4f}")
     logger.info(f"Baseline test acc (NEC={args.nec}): {base_test:.4f}")
     
     # Record original predictions for net correction analysis on TEST set (truly unseen)
@@ -98,33 +89,31 @@ def main():
     logger.info(f"Recorded predictions for {len(original_preds_test)} test samples")
 
     logger.info("Starting Type-3 budget curve (concept overrides)...")
-    logger.info("  Pattern: Intervene on val (eval) set, evaluate on same set (holistic analysis)")
+    logger.info("  Pattern: Intervene on val set, evaluate on same set (holistic analysis)")
     logger.info("  This matches manual_weight_editing.ipynb: see holistic impact of interventions")
     selector = lambda X, topk: rank_uncertain_concepts(X, topk=topk, T=2.0)
-    # Match manual experiment: intervene and evaluate on same set (val_eval for analysis)
-    curve = budget_curve_type3(X_val_eval, y_val_eval, W, b, selector_fn=selector, 
+    # Match manual experiment: intervene and evaluate on same set (val set for analysis)
+    curve = budget_curve_type3(Xva, yva, W, b, selector_fn=selector, 
                                topks=tuple(range(1, args.budget+1)), tau=args.tau_concept)
     logger.info(f"Type-3 (concept overrides) acc vs budget: {curve}")
 
     logger.info("Starting Type-4 weight nudges...")
-    logger.info("  Workflow: Find mistakes in Val (intervention) → Apply interventions → Evaluate on Val (eval) → Test")
-    logger.info("  Val (intervention) serves as intervention test ground")
-    logger.info("  Val (eval) checks if interventions generalize")
-    logger.info("  Test provides final evaluation")
+    logger.info("  Workflow: Find mistakes in Val → Apply interventions → Accept if val acc doesn't drop")
+    logger.info("  Then evaluate on Test set (unseen) to check generalization")
     
-    # Find mistakes in val_intervention set and apply interventions
-    # Use val_eval to check if interventions don't degrade performance
-    W2, b2, log = weight_nudge_eval(X_val_int, y_val_int, X_val_eval, y_val_eval, W, b, 
+    # Find mistakes in val set and apply interventions
+    # Accept interventions only if val accuracy doesn't drop (prevents overfitting)
+    W2, b2, log = weight_nudge_eval(Xva, yva, Xva, yva, W, b, 
                                      chosen_indices_fn=selector, tau=args.tau_weight, sample_limit=1000)
     logger.info(f"Type-4: Processed {len(log)} accepted edits out of 1000 attempts")
     
-    # Evaluate on val_eval (generalization check)
-    base_val_eval_after = accuracy(X_val_eval, y_val_eval, W2, b2)
-    logger.info(f"Val (eval) acc: {base_val_eval:.4f} → {base_val_eval_after:.4f} (delta: {base_val_eval_after-base_val_eval:+.4f})")
+    # Check val accuracy after interventions
+    base_val_after = accuracy(Xva, yva, W2, b2)
+    logger.info(f"Val acc: {base_val:.4f} → {base_val_after:.4f} (delta: {base_val_after-base_val:+.4f})")
     
-    # Final evaluation on test set
+    # Final evaluation on test set (unseen)
     base_test_after = accuracy(Xte, yte, W2, b2)
-    logger.info(f"Test acc: {base_test:.4f} → {base_test_after:.4f} (delta: {base_test_after-base_test:+.4f})  accepted_edits={len(log)}")
+    logger.info(f"Test acc (unseen): {base_test:.4f} → {base_test_after:.4f} (delta: {base_test_after-base_test:+.4f})  accepted_edits={len(log)}")
 
     # Holistic re-evaluation: Full accuracy impact analysis on TEST set (truly unseen)
     logger.info("Performing holistic re-evaluation on TEST set (unseen data)...")
@@ -146,16 +135,15 @@ def main():
 
     logger.info("Saving results...")
     save_json({
-        "baseline_val_eval_acc": base_val_eval,
+        "baseline_val_acc": base_val,
         "baseline_test_acc": base_test,
         "T3_curve": curve, 
-        "T4_val_eval_acc": base_val_eval_after,
+        "T4_val_acc": base_val_after,
         "T4_test_acc": base_test_after,
         "T4_log": log,
         "net_corrections": net_corrections,
         "nec": args.nec, 
-        "load_path": args.load_path,
-        "val_intervention_ratio": args.val_intervention_ratio
+        "load_path": args.load_path
     }, outdir, "summary")
     logger.info(f"Results saved to {outdir}/summary.json")
 
