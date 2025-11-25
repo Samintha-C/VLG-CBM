@@ -60,13 +60,35 @@ def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
         idx = selector_fn(Xm, topk=k)
         # Apply concept overrides to misclassified samples
         X2 = apply_concept_overrides(Xm, W, b, ym, pm, idx, m_target=0.0, tau=tau)
-        # Create full dataset with interventions applied
-        X_full = X.clone()
-        X_full[mis_mask] = X2
-        # Evaluate on the same set (holistic impact)
-        acc_k = accuracy(X_full, y, W, b)
+        # Memory-efficient evaluation: compute accuracy by evaluating correct and modified separately
+        # Correct samples: use original X
+        correct_mask = ~mis_mask
+        n_correct = correct_mask.sum().item()
+        n_mis = Xm.shape[0]
+        
+        # Count correct predictions on originally correct samples
+        if n_correct > 0:
+            X_correct = X[correct_mask]
+            y_correct = y[correct_mask]
+            correct_preds = (X_correct @ W.T + b).argmax(1)
+            n_still_correct = (correct_preds == y_correct).sum().item()
+        else:
+            n_still_correct = 0
+        
+        # Count correct predictions on modified misclassified samples
+        mis_preds = (X2 @ W.T + b).argmax(1)
+        n_fixed = (mis_preds == ym).sum().item()
+        
+        # Total accuracy
+        acc_k = (n_still_correct + n_fixed) / X.shape[0]
         out[k] = acc_k
         logger.info(f"  k={k}: accuracy = {acc_k:.4f} (delta: {acc_k-base:+.4f})")
+        
+        # Clean up intermediate tensors to free memory
+        del X2, mis_preds
+        if n_correct > 0:
+            del X_correct, y_correct, correct_preds
+        torch.cuda.empty_cache()
     return out
 
 def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,

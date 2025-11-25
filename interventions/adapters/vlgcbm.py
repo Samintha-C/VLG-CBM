@@ -71,16 +71,16 @@ def list_available_nec(load_path: str):
     def _nec(p): return int(os.path.basename(p).split("=")[1].split(".")[0])
     return sorted(set(_nec(p) for p in ws))
 
-def load_sparse_head(run: VLGCbmRun):
+def load_sparse_head(run: VLGCbmRun, device="cuda"):
     """Returns W [C x D], b [C], and inferred num_classes."""
     if run.nec is None:
         raise ValueError("Specify nec to load a precomputed sparse head.")
     fp = run.load_path
     w_path = os.path.join(fp, f"W_g@NEC={run.nec}.pt")
     b_path = os.path.join(fp, f"b_g@NEC={run.nec}.pt")
-    logger.info(f"Loading sparse head: W from {os.path.basename(w_path)}, b from {os.path.basename(b_path)}")
-    W = torch.load(w_path, map_location="cpu")
-    b = torch.load(b_path, map_location="cpu")
+    logger.info(f"Loading sparse head: W from {os.path.basename(w_path)}, b from {os.path.basename(b_path)} to {device}")
+    W = torch.load(w_path, map_location=device)
+    b = torch.load(b_path, map_location=device)
     C, D = W.shape
     logger.info(f"  Loaded W shape: {W.shape}, b shape: {b.shape}, num_classes: {C}")
     return W, b, C

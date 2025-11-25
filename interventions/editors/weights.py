@@ -10,7 +10,7 @@ def nudge_final_layer(W: torch.Tensor, b: torch.Tensor,
     if len(selected_js) == 0:
         return W.clone(), b.clone()
     
-    S = torch.tensor(selected_js, dtype=torch.long)
+    S = torch.tensor(selected_js, dtype=torch.long, device=W.device)
     xS = x_row[S]                     # [L]
     margin = (W[true_idx]-W[pred_idx]) @ x_row + (b[true_idx]-b[pred_idx])
     need = max(0.0, m_target - float(margin))

@@ -27,19 +27,19 @@ def main():
 
     logger.info("Loading sparse head...")
     run = VLGCbmRun(load_path=args.load_path, nec=args.nec)
-    W, b, C = load_sparse_head(run)
+    W, b, C = load_sparse_head(run, device=device)
     logger.info(f"Loaded W shape: {W.shape}, b shape: {b.shape}, num_classes: {C}")
-    W, b = W.to(device), b.to(device)
 
     logger.info("Loading data splits...")
     logger.info("="*70)
     logger.info("DATA SPLIT STRATEGY:")
-    logger.info("  Train: Training data (not used for interventions)")
-    logger.info("  Val: Find mistakes, apply interventions (concept recalibration)")
-    logger.info("  Test: Pure evaluation (unseen, not used in any intervention decisions)")
+    logger.info("  Train: Training data (not used for interventions) - keeping on CPU to save GPU memory")
+    logger.info("  Val: Find mistakes, apply interventions (concept recalibration) - on GPU")
+    logger.info("  Test: Pure evaluation (unseen, not used in any intervention decisions) - on GPU")
     logger.info("="*70)
     
-    tr = get_loader(run, "train", batch_size=4096, device=device)
+    # For large datasets like ImageNet, keep train on CPU (we don't use it for interventions)
+    tr = get_loader(run, "train", batch_size=4096, device="cpu")
     va = get_loader(run, "val", batch_size=4096, device=device)
     
     # Try to load test set, but if it doesn't exist, we'll split val set
@@ -83,10 +83,11 @@ def main():
         
         # Random permutation for splitting (with fixed seed for reproducibility)
         torch.manual_seed(42)
-        indices = torch.randperm(n_val)
+        indices = torch.randperm(n_val, device=device)
         int_indices = indices[:n_int]
         test_indices = indices[n_int:]
         
+        # Indexing preserves device, so Xva_int and Xte will be on the same device as Xva
         Xva_int = Xva[int_indices]
         yva_int = yva[int_indices]
         Xte = Xva[test_indices]
@@ -101,13 +102,17 @@ def main():
     else:
         logger.info("Using separate test set (not split from val)")
     
-    logger.info(f"Train: {Xtr.shape[0]} samples")
-    logger.info(f"Val: {Xva.shape[0]} samples (for interventions)")
-    logger.info(f"Test: {Xte.shape[0]} samples (unseen, for evaluation only)")
-    logger.info("Moving tensors to device...")
-    Xtr, ytr = Xtr.to(device), ytr.to(device)
-    Xva, yva = Xva.to(device), yva.to(device)
-    Xte, yte = Xte.to(device), yte.to(device)
+    logger.info(f"Train: {Xtr.shape[0]} samples (on CPU, not used for interventions)")
+    logger.info(f"Val: {Xva.shape[0]} samples (for interventions, on {device})")
+    logger.info(f"Test: {Xte.shape[0]} samples (unseen, for evaluation only, on {device})")
+    # Train stays on CPU (we don't use it), val and test are already on device from get_loader
+    # Just ensure val and test are on device (they should be already)
+    if Xva.device != torch.device(device):
+        logger.info("Moving val to device...")
+        Xva, yva = Xva.to(device), yva.to(device)
+    if Xte.device != torch.device(device):
+        logger.info("Moving test to device...")
+        Xte, yte = Xte.to(device), yte.to(device)
 
     logger.info("Computing baseline accuracy and recording original predictions...")
     base_val = accuracy(Xva, yva, W, b)
