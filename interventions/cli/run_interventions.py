@@ -39,12 +39,12 @@ def main():
     logger.info("  Test: Pure evaluation (unseen, not used in any intervention decisions)")
     logger.info("="*70)
     
-    tr = get_loader(run, "train", batch_size=4096)
-    va = get_loader(run, "val", batch_size=4096)
+    tr = get_loader(run, "train", batch_size=4096, device=device)
+    va = get_loader(run, "val", batch_size=4096, device=device)
     
     # Try to load test set, but if it doesn't exist, we'll split val set
     try:
-        te = get_loader(run, "test", batch_size=4096)
+        te = get_loader(run, "test", batch_size=4096, device=device)
         has_test = True
         logger.info("Found separate test set")
     except FileNotFoundError:
@@ -66,7 +66,7 @@ def main():
         if has_test:
             Xte = torch.cat([X for X,_ in te], 0)
             yte = torch.cat([y for _,y in te], 0)
-    
+
     # If test set doesn't exist, split val set into intervention and test
     if not has_test:
         logger.info("="*70)
@@ -114,7 +114,7 @@ def main():
     base_test = accuracy(Xte, yte, W, b)
     logger.info(f"Baseline val acc (NEC={args.nec}): {base_val:.4f}")
     logger.info(f"Baseline test acc (NEC={args.nec}): {base_test:.4f}")
-    
+
     # Record original predictions for net correction analysis on TEST set (truly unseen)
     logger.info("Recording baseline predictions on TEST set (unseen data)...")
     original_preds_test = get_predictions(Xte, W, b)

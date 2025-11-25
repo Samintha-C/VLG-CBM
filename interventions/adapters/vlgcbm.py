@@ -9,22 +9,23 @@ class VLGCbmRun:
     load_path: str     # e.g., /sc-cbint-vol/saved_models/vlg/cifar100
     nec: int | None = None  # if None, you can refit; else load W_g@NEC=nec
 
-def _load_split_tensors(run: VLGCbmRun, split: str):
+def _load_split_tensors(run: VLGCbmRun, split: str, device="cpu"):
     fp = run.load_path
     feat_path = os.path.join(fp, f"{split}_concept_features.pt")
     label_path = os.path.join(fp, f"{split}_concept_labels.pt")
     
     if not os.path.exists(feat_path):
-        raise FileNotFoundError(f"Concept features not found: {feat_path}")
+            raise FileNotFoundError(f"Concept features not found: {feat_path}")
     
-    logger.info(f"Loading {split} split: {os.path.basename(feat_path)}")
-    X = torch.load(feat_path, map_location="cpu")
-    y = torch.load(label_path, map_location="cpu")
+    logger.info(f"Loading {split} split: {os.path.basename(feat_path)} to {device}")
+    # Load directly to the specified device to avoid double memory usage
+    X = torch.load(feat_path, map_location=device)
+    y = torch.load(label_path, map_location=device)
     logger.info(f"  Loaded X shape: {X.shape}, y shape: {y.shape}")
     return X, y
 
-def get_loader(run: VLGCbmRun, split: str, batch_size=256, num_workers=2, shuffle=False):
-    X, y = _load_split_tensors(run, split)
+def get_loader(run: VLGCbmRun, split: str, batch_size=256, num_workers=2, shuffle=False, device="cpu"):
+    X, y = _load_split_tensors(run, split, device=device)
     ds = TensorDataset(X, y)
     return DataLoader(ds, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, pin_memory=False)
 
