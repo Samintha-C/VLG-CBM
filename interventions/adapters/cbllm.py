@@ -10,7 +10,27 @@ from datasets import load_dataset
 from transformers import RobertaTokenizerFast, RobertaModel, GPT2TokenizerFast, GPT2Model
 
 # Add CB-LLM classification path to sys.path
-CBLLM_CLASSIFICATION_PATH = os.path.join(os.path.dirname(__file__), "../../../CB-LLMs/classification")
+# Try multiple possible locations
+possible_paths = [
+    os.path.join(os.path.dirname(__file__), "../../../CB-LLMs/classification"),
+    "/sc-cbint-vol/CB-LLMs/classification",
+    "/sc-cbint-vol/twml/CB-LLMs/classification",
+    os.path.join(os.path.dirname(__file__), "../../../../CB-LLMs/classification"),
+]
+
+CBLLM_CLASSIFICATION_PATH = None
+for path in possible_paths:
+    abs_path = os.path.abspath(path)
+    if os.path.exists(abs_path) and os.path.exists(os.path.join(abs_path, "config.py")):
+        CBLLM_CLASSIFICATION_PATH = abs_path
+        break
+
+if CBLLM_CLASSIFICATION_PATH is None:
+    raise ImportError(
+        f"Could not find CB-LLMs/classification directory. Tried: {possible_paths}. "
+        "Please ensure CB-LLMs is cloned and accessible."
+    )
+
 if CBLLM_CLASSIFICATION_PATH not in sys.path:
     sys.path.insert(0, CBLLM_CLASSIFICATION_PATH)
 
@@ -29,30 +49,65 @@ class CBLLMRun:
     device: str = "cuda"
 
 def _parse_load_path(load_path: str):
-    parts = [p for p in load_path.split("/") if p]
-    if len(parts) < 2:
-        raise ValueError(f"Invalid load_path format: {load_path}. Expected format: 'acs/dataset/backbone_cbm' or 'acs/dataset/backbone_cbm/cbl.pt'")
-    
-    acs = parts[0]  # e.g., "mpnet_acs"
-    dataset_name = parts[1]  # e.g., "SetFit_sst2"
-    
-    if len(parts) >= 3:
-        backbone = parts[2]  # e.g., "roberta_cbm"
-        cbl_name = parts[-1] if len(parts) > 3 and parts[-1].endswith(".pt") else "cbl.pt"
+    """
+    Parse load_path to extract acs, dataset, backbone_type, and cbl_name.
+    Handles both absolute and relative paths.
+    Examples:
+        - /sc-cbint-vol/cbllm-outputs/mpnet_acs/SetFit_sst2/roberta_cbm
+        - mpnet_acs/SetFit_sst2/roberta_cbm
+        - mpnet_acs/SetFit_sst2/roberta_cbm/cbl_acc.pt
+    """
+    # Normalize path and find the actual model directory
+    load_path = os.path.normpath(load_path)
+    if os.path.isfile(load_path):
+        # If it's a file, get the directory
+        model_dir = os.path.dirname(load_path)
+        cbl_name = os.path.basename(load_path)
     else:
-        backbone = None
-        cbl_name = "cbl.pt"
-    
-    if backbone:
-        if "roberta" in backbone:
-            backbone_type = "roberta"
-        elif "gpt2" in backbone:
-            backbone_type = "gpt2"
+        # If it's a directory, find the cbl file
+        model_dir = load_path
+        cbl_files = [f for f in os.listdir(model_dir) if f.startswith("cbl") and f.endswith(".pt")]
+        if cbl_files:
+            cbl_name = cbl_files[0]  # Use first cbl file found
         else:
-            raise ValueError(f"Unknown backbone in path: {backbone}")
-    else:
-        backbone_type = "roberta"
+            cbl_name = "cbl_acc.pt"  # Default
     
+    # Extract components from path
+    parts = [p for p in model_dir.split(os.sep) if p]
+    
+    # Find mpnet_acs (or similar acs name) in the path
+    acs_idx = None
+    for i, part in enumerate(parts):
+        if "acs" in part.lower() or part in ["mpnet_acs", "simcse_acs", "angle_acs"]:
+            acs_idx = i
+            break
+    
+    if acs_idx is None:
+        raise ValueError(f"Could not find ACS directory (mpnet_acs, etc.) in path: {load_path}")
+    
+    acs = parts[acs_idx]
+    
+    # Next part should be dataset
+    if acs_idx + 1 >= len(parts):
+        raise ValueError(f"Invalid path structure. Expected: .../acs/dataset/backbone_cbm, got: {load_path}")
+    
+    dataset_name = parts[acs_idx + 1]
+    
+    # Next part should be backbone
+    if acs_idx + 2 >= len(parts):
+        raise ValueError(f"Invalid path structure. Expected: .../acs/dataset/backbone_cbm, got: {load_path}")
+    
+    backbone = parts[acs_idx + 2]
+    
+    # Determine backbone type
+    if "roberta" in backbone:
+        backbone_type = "roberta"
+    elif "gpt2" in backbone:
+        backbone_type = "gpt2"
+    else:
+        raise ValueError(f"Unknown backbone in path: {backbone}. Expected 'roberta' or 'gpt2' in directory name.")
+    
+    # Convert dataset name (SetFit_sst2 -> SetFit/sst2)
     dataset = dataset_name.replace('_', '/') if 'sst2' in dataset_name else dataset_name
     
     return acs, dataset, backbone_type, cbl_name
@@ -65,9 +120,20 @@ def _load_model(run: CBLLMRun, device):
     
     concept_set = CFG.concept_set[dataset]
     
-    cbl_path = os.path.join(run.load_path, cbl_name)
+    # Get the model directory
+    model_dir = os.path.normpath(run.load_path)
+    if os.path.isfile(model_dir):
+        model_dir = os.path.dirname(model_dir)
+    
+    cbl_path = os.path.join(model_dir, cbl_name)
     if not os.path.exists(cbl_path):
-        raise FileNotFoundError(f"CBL model not found: {cbl_path}")
+        # Try to find any cbl file
+        cbl_files = [f for f in os.listdir(model_dir) if f.startswith("cbl") and f.endswith(".pt")]
+        if cbl_files:
+            cbl_path = os.path.join(model_dir, cbl_files[0])
+            logger.info(f"Using CBL file: {cbl_files[0]}")
+        else:
+            raise FileNotFoundError(f"CBL model not found in {model_dir}. Expected file like 'cbl_acc.pt'")
     
     if backbone_type == "roberta":
         if 'no_backbone' in cbl_name:
@@ -197,14 +263,26 @@ def _load_split_tensors(run: CBLLMRun, split: str, device="cpu"):
 
 def _normalize_features(X, run: CBLLMRun):
     acs, dataset, backbone_type, cbl_name = _parse_load_path(run.load_path)
-    model_name = cbl_name[3:] if cbl_name.startswith("cbl") else cbl_name
+    # Extract model suffix (e.g., "_acc" from "cbl_acc.pt" or "_acc.pt" from "cbl_acc.pt")
+    if cbl_name.startswith("cbl"):
+        model_name = cbl_name[3:]  # Remove "cbl" prefix
+        if model_name.startswith("_"):
+            model_name = model_name[1:]  # Remove leading underscore if present
+        if model_name.endswith(".pt"):
+            model_name = model_name[:-3]  # Remove .pt extension
+        if model_name:
+            model_name = "_" + model_name  # Add back underscore for file naming
+        else:
+            model_name = ""
+    else:
+        model_name = ""
     
-    prefix = run.load_path
-    if not os.path.isabs(prefix):
-        prefix = os.path.join(os.getcwd(), prefix)
+    prefix = os.path.normpath(run.load_path)
+    if os.path.isfile(prefix):
+        prefix = os.path.dirname(prefix)
     
-    train_mean_path = os.path.join(prefix, f'train_mean{model_name}')
-    train_std_path = os.path.join(prefix, f'train_std{model_name}')
+    train_mean_path = os.path.join(prefix, f'train_mean{model_name}.pt')
+    train_std_path = os.path.join(prefix, f'train_std{model_name}.pt')
     
     if not os.path.exists(train_mean_path) or not os.path.exists(train_std_path):
         raise FileNotFoundError(f"Normalization stats not found: {train_mean_path} or {train_std_path}")
@@ -227,19 +305,26 @@ def get_loader(run: CBLLMRun, split: str, batch_size=256, num_workers=2, shuffle
 
 def load_sparse_head(run: CBLLMRun, device="cuda"):
     acs, dataset, backbone_type, cbl_name = _parse_load_path(run.load_path)
-    model_name = cbl_name[3:] if cbl_name.startswith("cbl") else cbl_name
+    # Extract model suffix (e.g., "_acc" from "cbl_acc.pt")
+    if cbl_name.startswith("cbl"):
+        model_name = cbl_name[3:]  # Remove "cbl" prefix
+        if model_name.startswith("_"):
+            model_name = model_name[1:]  # Remove leading underscore if present
+        if model_name.endswith(".pt"):
+            model_name = model_name[:-3]  # Remove .pt extension
+        if model_name:
+            model_name = "_" + model_name  # Add back underscore for file naming
+        else:
+            model_name = ""
+    else:
+        model_name = ""
     
-    prefix = run.load_path
-    if not os.path.isabs(prefix):
-        prefix = os.path.join(os.getcwd(), prefix)
+    prefix = os.path.normpath(run.load_path)
+    if os.path.isfile(prefix):
+        prefix = os.path.dirname(prefix)
     
-    W_g_path = os.path.join(prefix, "W_g")
-    b_g_path = os.path.join(prefix, "b_g")
-    if run.sparse:
-        W_g_path += "_sparse"
-        b_g_path += "_sparse"
-    W_g_path += model_name
-    b_g_path += model_name
+    W_g_path = os.path.join(prefix, f"W_g{'_sparse' if run.sparse else ''}{model_name}.pt")
+    b_g_path = os.path.join(prefix, f"b_g{'_sparse' if run.sparse else ''}{model_name}.pt")
     
     if not os.path.exists(W_g_path) or not os.path.exists(b_g_path):
         raise FileNotFoundError(f"Sparse head weights not found: {W_g_path} or {b_g_path}")
