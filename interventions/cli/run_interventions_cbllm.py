@@ -14,7 +14,7 @@ from interventions.adapters.cbllm import CBLLMRun, get_loader, load_sparse_head
 from interventions.evaluate.sweep import accuracy, budget_curve_type3, weight_nudge_eval, compute_net_corrections, get_predictions
 from interventions.selectors.entropy import rank_uncertain_concepts
 from interventions.selectors.cis import rank_by_cis
-from interventions.evaluate.report import save_report, create_output_dir
+from interventions.evaluate.report import stamp_dir, save_json
 
 def main():
     parser = argparse.ArgumentParser(description="Run interventions on CB-LLM")
@@ -61,7 +61,11 @@ def main():
         device=args.device
     )
     
-    output_dir = create_output_dir(args.output_dir, prefix="cbllm_interventions")
+    if args.output_dir:
+        output_dir = args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+    else:
+        output_dir = stamp_dir(base="/sc-cbint-vol/cbllm-outputs/interventions")
     logger.info(f"Output directory: {output_dir}")
     
     logger.info("Loading sparse head weights...")
@@ -190,6 +194,9 @@ def main():
     logger.info(f"  Net corrections: {net_corrections['net_corrections']}")
     logger.info("="*70)
     
+    base_val_after = accuracy(Xva, yva, W_new, b_new)
+    base_test_after = accuracy(Xte, yte, W_new, b_new)
+    
     summary = {
         "load_path": args.load_path,
         "sparse": args.sparse,
@@ -198,12 +205,14 @@ def main():
         "baseline_val_acc": float(base_val),
         "baseline_test_acc": float(base_test),
         "type3_budget_curve": {int(k): float(v) for k, v in curve.items()},
-        "type4_nudge_stats": {k: float(v) if isinstance(v, (int, float)) else v for k, v in nudge_stats.items()},
+        "type4_val_acc": float(base_val_after),
+        "type4_test_acc": float(base_test_after),
+        "type4_nudges_accepted": len(nudge_stats),
         "net_corrections": {k: float(v) if isinstance(v, torch.Tensor) else (int(v) if isinstance(v, (int, float)) else v) 
                            for k, v in net_corrections.items()},
     }
     
-    save_report(summary, output_dir)
+    save_json(summary, output_dir, "summary")
     logger.info(f"Results saved to {output_dir}/summary.json")
 
 if __name__ == "__main__":
