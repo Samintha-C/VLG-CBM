@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from interventions.adapters.cbllm import CBLLMRun, get_loader, load_sparse_head
 from interventions.evaluate.sweep import accuracy, budget_curve_type3, weight_nudge_eval, compute_net_corrections, get_predictions
-from interventions.selectors.entropy import sigmoid_entropy_selector
+from interventions.selectors.entropy import rank_uncertain_concepts
 from interventions.selectors.cis import rank_by_cis
 from interventions.evaluate.report import save_report, create_output_dir
 
@@ -151,7 +151,7 @@ def main():
     original_preds_test = get_predictions(Xte, W, b)
     
     if args.selector == "entropy":
-        selector = lambda X, topk: sigmoid_entropy_selector(X, topk=topk)
+        selector = lambda X, topk: rank_uncertain_concepts(X, topk=topk)
     elif args.selector == "cis":
         selector = lambda X, topk: rank_by_cis(X, W, yva, get_predictions(X, W, b), topk=topk)
     else:
@@ -170,7 +170,7 @@ def main():
     logger.info("  Accepting nudges if validation accuracy doesn't drop")
     W_new, b_new, nudge_stats = weight_nudge_eval(
         X_train=Xva, y_train=yva, X_val=Xva, y_val=yva, W=W, b=b,
-        chosen_indices_fn=lambda X, y_true, y_pred: selector(X[y_true != y_pred], topk=1),
+        chosen_indices_fn=selector,
         tau=args.weight_tau, sample_limit=args.sample_limit
     )
     
