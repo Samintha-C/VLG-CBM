@@ -208,14 +208,23 @@ def _extract_concept_features(run: CBLLMRun, split: str, preLM, cbl, backbone_cb
         encoded_dataset = encoded_dataset.remove_columns(['title'])
     
     class ClassificationDataset(torch.utils.data.Dataset):
-        def __init__(self, texts):
-            self.texts = texts
+        def __init__(self, dataset):
+            self.dataset = dataset
         def __getitem__(self, idx):
-            return {key: torch.tensor(values[idx]) for key, values in self.texts.items()}
+            item = self.dataset[idx]
+            # HuggingFace Dataset returns a dict when indexed
+            # Convert values to tensors
+            return {key: torch.tensor(value) if not isinstance(value, torch.Tensor) else value 
+                    for key, value in item.items()}
         def __len__(self):
-            return len(self.texts['input_ids'])
+            return len(self.dataset)
     
-    loader = DataLoader(ClassificationDataset(encoded_dataset), batch_size=run.batch_size, shuffle=False)
+    def collate_fn(batch):
+        """Collate function to stack tensors from a batch of dicts"""
+        keys = batch[0].keys()
+        return {k: torch.stack([item[k] for item in batch]) for k in keys}
+    
+    loader = DataLoader(ClassificationDataset(encoded_dataset), batch_size=run.batch_size, shuffle=False, collate_fn=collate_fn)
     
     logger.info(f"Extracting concept features from {split}...")
     features_list = []
@@ -251,8 +260,20 @@ def _load_split_tensors(run: CBLLMRun, split: str, device="cpu"):
         return X, y
     
     logger.info(f"Cache not found, extracting {split} features from model...")
-    preLM, cbl, backbone_cbl, concept_set, dataset, acs, cbl_name = _load_model(run, device)
-    X, y = _extract_concept_features(run, split, preLM, cbl, backbone_cbl, device)
+    # Always use GPU for model computation, even if final output goes to CPU
+    model_device = run.device if run.device != "cpu" else "cuda"
+    if not torch.cuda.is_available() and model_device == "cuda":
+        model_device = "cpu"
+        logger.warning("CUDA not available, falling back to CPU")
+    logger.info(f"Loading model on {model_device} for feature extraction (output will be on {device})")
+    preLM, cbl, backbone_cbl, concept_set, dataset, acs, cbl_name = _load_model(run, model_device)
+    X, y = _extract_concept_features(run, split, preLM, cbl, backbone_cbl, model_device)
+    
+    # Move to requested device if different
+    if device != model_device:
+        logger.info(f"Moving features from {model_device} to {device}")
+        X = X.to(device)
+        y = y.to(device)
     
     logger.info(f"Caching {split} features to {cache_path}")
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -287,8 +308,9 @@ def _normalize_features(X, run: CBLLMRun):
     if not os.path.exists(train_mean_path) or not os.path.exists(train_std_path):
         raise FileNotFoundError(f"Normalization stats not found: {train_mean_path} or {train_std_path}")
     
-    train_mean = torch.load(train_mean_path)
-    train_std = torch.load(train_std_path)
+    # Load normalization stats to the same device as X
+    train_mean = torch.load(train_mean_path, map_location=X.device)
+    train_std = torch.load(train_std_path, map_location=X.device)
     
     X_norm, _, _ = normalize(X, d=0, mean=train_mean, std=train_std)
     X_norm = F.relu(X_norm)
@@ -298,8 +320,11 @@ def _normalize_features(X, run: CBLLMRun):
 def get_loader(run: CBLLMRun, split: str, batch_size=256, num_workers=2, shuffle=False, device="cpu"):
     X, y = _load_split_tensors(run, split, device=device)
     X = _normalize_features(X, run)
-    X = X.to(device)
-    y = y.to(device)
+    # Ensure tensors are on the requested device
+    if X.device != torch.device(device):
+        X = X.to(device)
+    if y.device != torch.device(device):
+        y = y.to(device)
     ds = TensorDataset(X, y)
     return DataLoader(ds, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, pin_memory=False)
 

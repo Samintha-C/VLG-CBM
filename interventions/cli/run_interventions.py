@@ -3,6 +3,7 @@ import argparse, torch
 from loguru import logger
 from ..adapters.vlgcbm import VLGCbmRun, get_loader, load_sparse_head
 from ..selectors.entropy import rank_uncertain_concepts
+from ..selectors.cis import rank_by_cis
 from ..selectors.confusion import top_confusions, bucket_indices
 from ..evaluate.sweep import budget_curve_type3, weight_nudge_eval, accuracy, get_predictions, compute_net_corrections
 from ..evaluate.report import stamp_dir, save_json
@@ -16,6 +17,8 @@ def main():
     ap.add_argument("--tau_concept", type=float, default=2.0)
     ap.add_argument("--tau_weight", type=float, default=1e-2)
     ap.add_argument("--device", type=str, default=None)
+    ap.add_argument("--selector", type=str, default="entropy", choices=["entropy", "cis"],
+                    help="Concept selector: 'entropy' (UCP) or 'cis' (Class-Pair Impact Score)")
     args = ap.parse_args()
 
     device = args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -128,7 +131,19 @@ def main():
     logger.info("Starting Type-3 budget curve (concept overrides)...")
     logger.info("  Pattern: Intervene on val set, evaluate on same set (holistic analysis)")
     logger.info("  This matches manual_weight_editing.ipynb: see holistic impact of interventions")
-    selector = lambda X, topk: rank_uncertain_concepts(X, topk=topk, T=2.0)
+    
+    # Set up selector based on argument
+    if args.selector == "entropy":
+        logger.info(f"Using selector: {args.selector} (UCP - Uncertainty-based Concept Prioritization)")
+        selector = lambda X, topk: rank_uncertain_concepts(X, topk=topk, T=2.0)
+    elif args.selector == "cis":
+        logger.info(f"Using selector: {args.selector} (CIS - Class-Pair Impact Score)")
+        # Get predictions for CIS selector
+        val_preds = get_predictions(Xva, W, b)
+        selector = lambda X, topk: rank_by_cis(X, W, yva, val_preds, topk=topk)
+    else:
+        raise ValueError(f"Unknown selector: {args.selector}")
+    
     # Match manual experiment: intervene and evaluate on same set (val set for analysis)
     curve = budget_curve_type3(Xva, yva, W, b, selector_fn=selector, 
                                topks=tuple(range(1, args.budget+1)), tau=args.tau_concept)
@@ -138,10 +153,19 @@ def main():
     logger.info("  Workflow: Find mistakes in Val → Apply interventions → Accept if val acc doesn't drop")
     logger.info("  Then evaluate on Test set (unseen) to check generalization")
     
+    # For weight nudges, CIS selector has interface limitations
+    # weight_nudge_eval calls chosen_indices_fn(X, topk) without y_true/y_pred
+    # So for CIS, we use entropy as fallback for weight nudges
+    if args.selector == "cis":
+        logger.info("Note: Using entropy selector for Type-4 weight nudges (CIS requires y_true/y_pred not available in this context)")
+        weight_nudge_selector = lambda X, topk: rank_uncertain_concepts(X, topk=topk, T=2.0)
+    else:
+        weight_nudge_selector = selector
+    
     # Find mistakes in val set and apply interventions
     # Accept interventions only if val accuracy doesn't drop (prevents overfitting)
     W2, b2, log = weight_nudge_eval(Xva, yva, Xva, yva, W, b, 
-                                     chosen_indices_fn=selector, tau=args.tau_weight, sample_limit=1000)
+                                     chosen_indices_fn=weight_nudge_selector, tau=args.tau_weight, sample_limit=1000)
     logger.info(f"Type-4: Processed {len(log)} accepted edits out of 1000 attempts")
     
     # Check val accuracy after interventions
@@ -180,7 +204,8 @@ def main():
         "T4_log": log,
         "net_corrections": net_corrections,
         "nec": args.nec, 
-        "load_path": args.load_path
+        "load_path": args.load_path,
+        "selector": args.selector
     }, outdir, "summary")
     logger.info(f"Results saved to {outdir}/summary.json")
 
