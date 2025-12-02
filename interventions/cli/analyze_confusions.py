@@ -120,7 +120,7 @@ def main():
         if len(correct_indices) > 0:
             X_correct = X[correct_indices]
             print(f"   Comparison with correctly classified {t_name} samples ({len(correct_indices)} samples):")
-            for idx, concept_idx in enumerate(top_concepts.indices[:5], 1):
+            for idx, concept_idx in enumerate(top_concepts_cis.indices[:5], 1):
                 concept_name = concepts[concept_idx] if concepts and concept_idx < len(concepts) else f"Concept_{concept_idx}"
                 avg_confused = X_pair[:, concept_idx].mean().item()
                 avg_correct = X_correct[:, concept_idx].mean().item()
