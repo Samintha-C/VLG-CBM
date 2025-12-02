@@ -45,7 +45,17 @@ def main():
     p = logits.argmax(1)
     
     cm = confusion_matrix(y, p, C)
-    pairs = top_confusions(y, p, k=args.top_k)
+    
+    # Filter to only actual confusions (true != pred)
+    misclassified_mask = (y != p)
+    y_mis = y[misclassified_mask]
+    p_mis = p[misclassified_mask]
+    
+    if len(y_mis) == 0:
+        print("No misclassifications found!")
+        return
+    
+    pairs = top_confusions(y_mis, p_mis, k=args.top_k)
     
     concepts = None
     if args.concepts:
