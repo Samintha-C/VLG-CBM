@@ -4,6 +4,7 @@ from pathlib import Path
 from ..adapters.vlgcbm import VLGCbmRun, load_sparse_head, forward_final, confusion_matrix
 from ..selectors.confusion import top_confusions, bucket_indices
 from ..selectors.cis import class_pair_impact
+from ..selectors.entropy import sigmoid_entropy
 
 def main():
     ap = argparse.ArgumentParser()
@@ -94,14 +95,26 @@ def main():
         
         X_pair = X[indices]
         
+        # CIS ranking (weight-based)
         g = class_pair_impact(W, t, q)
-        top_concepts = torch.topk(g, k=min(10, len(g)), largest=True)
+        top_concepts_cis = torch.topk(g, k=min(10, len(g)), largest=True)
+        
+        # Entropy ranking (uncertainty-based)
+        H = sigmoid_entropy(X_pair, T=2.0)  # [N, D]
+        H_mean = H.mean(dim=0)  # Average entropy per concept across samples
+        top_concepts_entropy = torch.topk(H_mean, k=min(10, len(H_mean)), largest=True)
         
         print(f"   Top concepts by CIS score (|W[{t}] - W[{q}]|):")
-        for idx, (concept_idx, score) in enumerate(zip(top_concepts.indices, top_concepts.values), 1):
+        for idx, (concept_idx, score) in enumerate(zip(top_concepts_cis.indices, top_concepts_cis.values), 1):
             concept_name = concepts[concept_idx] if concepts and concept_idx < len(concepts) else f"Concept_{concept_idx}"
             avg_activation = X_pair[:, concept_idx].mean().item()
             print(f"      {idx:2d}. {concept_name:30s} (idx {concept_idx:3d}): score={score:.4f}, avg_activation={avg_activation:.4f}")
+        
+        print(f"   Top concepts by Entropy (uncertainty, T=2.0):")
+        for idx, (concept_idx, entropy) in enumerate(zip(top_concepts_entropy.indices, top_concepts_entropy.values), 1):
+            concept_name = concepts[concept_idx] if concepts and concept_idx < len(concepts) else f"Concept_{concept_idx}"
+            avg_activation = X_pair[:, concept_idx].mean().item()
+            print(f"      {idx:2d}. {concept_name:30s} (idx {concept_idx:3d}): entropy={entropy:.4f}, avg_activation={avg_activation:.4f}")
         
         correct_indices = torch.nonzero((y == p) & (y == t), as_tuple=False).view(-1)
         if len(correct_indices) > 0:
