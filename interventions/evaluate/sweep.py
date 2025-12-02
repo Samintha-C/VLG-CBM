@@ -21,7 +21,7 @@ def get_predictions(X, W, b, batch=4096):
         preds.append(logits.argmax(1))
     return torch.cat(preds, dim=0)
 
-def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
+def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0, return_edits=False):
     """
     Type-3 budget curve: Apply concept overrides and evaluate on the same set.
     
@@ -40,12 +40,17 @@ def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
         selector_fn: Function to select concepts for intervention
         topks: Tuple of k values to try (e.g., (1, 2, 3))
         tau: Budget constraint for concept overrides
+        return_edits: If True, return detailed edit records
     
     Returns:
         dict: {k: acc_after_k_edits}, starting from baseline acc.
+        If return_edits=True, also returns edits_dict: {k: list of edit records}
     """
+    from ..editors.concepts import apply_concept_overrides
+    
     base = accuracy(X, y, W, b)
     out = {0: base}
+    edits_dict = {} if return_edits else None
     logger.info(f"Baseline accuracy: {base:.4f}")
     
     # Find misclassified samples
@@ -59,7 +64,12 @@ def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
         # Select concepts to edit
         idx = selector_fn(Xm, topk=k)
         # Apply concept overrides to misclassified samples
-        X2 = apply_concept_overrides(Xm, W, b, ym, pm, idx, m_target=0.0, tau=tau)
+        if return_edits:
+            X2, edits = apply_concept_overrides(Xm, W, b, ym, pm, idx, m_target=0.0, tau=tau, return_edits=True)
+            edits_dict[k] = edits
+        else:
+            X2 = apply_concept_overrides(Xm, W, b, ym, pm, idx, m_target=0.0, tau=tau)
+        
         # Memory-efficient evaluation: compute accuracy by evaluating correct and modified separately
         # Correct samples: use original X
         correct_mask = ~mis_mask
@@ -89,6 +99,9 @@ def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
         if n_correct > 0:
             del X_correct, y_correct, correct_preds
         torch.cuda.empty_cache()
+    
+    if return_edits:
+        return out, edits_dict
     return out
 
 def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
@@ -117,6 +130,7 @@ def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
     logger.info(f"Processing {len(mis_idx)} samples for weight nudges...")
 
     accepted = 0
+    prev_val_acc = base_val
     for idx, i in enumerate(mis_idx.tolist()):
         if (idx + 1) % 100 == 0:
             logger.info(f"  Processed {idx+1}/{len(mis_idx)} samples, accepted {accepted} edits")
@@ -128,13 +142,43 @@ def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
         except TypeError:
             # Standard interface: just (X, topk)
             js = chosen_indices_fn(X_train[i:i+1], topk=1)[0].tolist()
+        
+        # Track weight changes before applying
+        weight_changes = []
+        for j in js:
+            old_w_t = W2[t, j].item()
+            old_w_p = W2[p, j].item()
+            weight_changes.append({
+                "concept_idx": int(j),
+                "old_W_true": old_w_t,
+                "old_W_pred": old_w_p
+            })
+        
         W_try, b_try = nudge_final_layer(W2, b2, X_train[i], t, p, js, tau=tau)
         new_val = accuracy(X_val, y_val, W_try, b_try)
         if new_val + 1e-6 >= base_val:
+            # Record weight changes after acceptance
+            for wc in weight_changes:
+                j = wc["concept_idx"]
+                wc["new_W_true"] = W_try[t, j].item()
+                wc["new_W_pred"] = W_try[p, j].item()
+                wc["delta_W_true"] = wc["new_W_true"] - wc["old_W_true"]
+                wc["delta_W_pred"] = wc["new_W_pred"] - wc["old_W_pred"]
+                wc["concept_activation"] = X_train[i, j].item()
+            
             W2, b2 = W_try, b_try
+            prev_val_acc = base_val
             base_val = new_val
             accepted += 1
-            log.append({"i": i, "t": t, "p": p, "js": js})
+            log.append({
+                "sample_idx": i,
+                "true_class": t,
+                "pred_class": p,
+                "concept_indices": js,
+                "weight_changes": weight_changes,
+                "val_acc_before": prev_val_acc,
+                "val_acc_after": new_val
+            })
     
     logger.info(f"Accepted {accepted} weight nudges, final val acc: {base_val:.4f}")
     return W2, b2, log

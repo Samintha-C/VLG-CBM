@@ -18,15 +18,40 @@ def apply_concept_overrides(X: torch.Tensor, W: torch.Tensor, b: torch.Tensor,
                             y_true: torch.Tensor, y_pred: torch.Tensor,
                             chosen_indices: torch.Tensor,  # [N, L] concepts per sample
                             m_target: float = 0.0, tau: float = 2.0,
-                            clip_bounds: tuple[float,float] | None = None):
+                            clip_bounds: tuple[float,float] | None = None,
+                            return_edits: bool = False):
     """
     Returns a *copy* X' with per-sample small overrides on chosen concept indices.
+    If return_edits=True, also returns a list of edit records.
     """
     X2 = X.clone()
     low, high = clip_bounds if clip_bounds is not None else (-float("inf"), float("inf"))
+    edits = [] if return_edits else None
+    
     for i in range(X.shape[0]):
         t, p = int(y_true[i]), int(y_pred[i])
+        sample_edits = []
         for j in chosen_indices[i].tolist():
+            old_val = X2[i, j].item()
             d = minimal_single_edit_delta(X2[i], W, b, t, p, j, m_target=m_target, tau=tau)
             X2[i, j] = X2[i, j].add_(d).clamp_(low, high)
+            new_val = X2[i, j].item()
+            if return_edits:
+                sample_edits.append({
+                    "concept_idx": int(j),
+                    "delta": float(d),
+                    "old_activation": old_val,
+                    "new_activation": new_val,
+                    "weight_diff": float(W[t, j] - W[p, j])
+                })
+        if return_edits and sample_edits:
+            edits.append({
+                "sample_idx": int(i),
+                "true_class": int(t),
+                "pred_class": int(p),
+                "concept_edits": sample_edits
+            })
+    
+    if return_edits:
+        return X2, edits
     return X2

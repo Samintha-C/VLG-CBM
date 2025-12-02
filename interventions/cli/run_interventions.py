@@ -167,8 +167,9 @@ def main():
         raise ValueError(f"Unknown selector: {args.selector}")
     
     # Match manual experiment: intervene and evaluate on same set (val set for analysis)
-    curve = budget_curve_type3(Xva, yva, W, b, selector_fn=selector, 
-                               topks=tuple(range(1, args.budget+1)), tau=args.tau_concept)
+    curve, t3_edits = budget_curve_type3(Xva, yva, W, b, selector_fn=selector, 
+                                         topks=tuple(range(1, args.budget+1)), tau=args.tau_concept,
+                                         return_edits=True)
     logger.info(f"Type-3 (concept overrides) acc vs budget: {curve}")
 
     logger.info("Starting Type-4 weight nudges...")
@@ -235,14 +236,17 @@ def main():
     save_json({
         "baseline_val_acc": base_val,
         "baseline_test_acc": base_test,
-        "T3_curve": curve, 
+        "T3_curve": curve,
+        "T3_edits": t3_edits,  # Detailed concept edit records
         "T4_val_acc": base_val_after,
         "T4_test_acc": base_test_after,
-        "T4_log": log,
+        "T4_log": log,  # Already includes detailed weight changes
         "net_corrections": net_corrections,
         "nec": args.nec, 
         "load_path": args.load_path,
-        "selector": args.selector
+        "selector": args.selector,
+        "tau_concept": args.tau_concept,
+        "tau_weight": args.tau_weight
     }, outdir, "summary")
     logger.info(f"Results saved to {outdir}/summary.json")
 
