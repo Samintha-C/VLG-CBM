@@ -100,9 +100,26 @@ def main():
         top_concepts_cis = torch.topk(g, k=min(10, len(g)), largest=True)
         
         # Entropy ranking (uncertainty-based)
+        # Only consider concepts that have non-zero weights for either class (NEC sparsity)
+        # This filters out irrelevant concepts that have zero weight
+        weight_relevant = (W[t].abs() > 1e-6) | (W[q].abs() > 1e-6)
+        relevant_concept_indices = torch.nonzero(weight_relevant, as_tuple=False).view(-1)
+        
         H = sigmoid_entropy(X_pair, T=2.0)  # [N, D]
         H_mean = H.mean(dim=0)  # Average entropy per concept across samples
-        top_concepts_entropy = torch.topk(H_mean, k=min(10, len(H_mean)), largest=True)
+        
+        if len(relevant_concept_indices) > 0:
+            # Only rank concepts with non-zero weights
+            H_relevant = H_mean[relevant_concept_indices]
+            top_relevant = torch.topk(H_relevant, k=min(10, len(H_relevant)), largest=True)
+            # Map back to original concept indices
+            top_concepts_entropy_indices = relevant_concept_indices[top_relevant.indices]
+            top_concepts_entropy_values = top_relevant.values
+        else:
+            # Fallback: use all concepts if none have weights (shouldn't happen)
+            top_concepts_entropy = torch.topk(H_mean, k=min(10, len(H_mean)), largest=True)
+            top_concepts_entropy_indices = top_concepts_entropy.indices
+            top_concepts_entropy_values = top_concepts_entropy.values
         
         print(f"   Top concepts by CIS score (|W[{t}] - W[{q}]|):")
         for idx, (concept_idx, score) in enumerate(zip(top_concepts_cis.indices, top_concepts_cis.values), 1):
@@ -110,11 +127,13 @@ def main():
             avg_activation = X_pair[:, concept_idx].mean().item()
             print(f"      {idx:2d}. {concept_name:30s} (idx {concept_idx:3d}): score={score:.4f}, avg_activation={avg_activation:.4f}")
         
-        print(f"   Top concepts by Entropy (uncertainty, T=2.0):")
-        for idx, (concept_idx, entropy) in enumerate(zip(top_concepts_entropy.indices, top_concepts_entropy.values), 1):
+        print(f"   Top concepts by Entropy (uncertainty, T=2.0, filtered to concepts with non-zero weights):")
+        for idx, (concept_idx, entropy) in enumerate(zip(top_concepts_entropy_indices, top_concepts_entropy_values), 1):
             concept_name = concepts[concept_idx] if concepts and concept_idx < len(concepts) else f"Concept_{concept_idx}"
             avg_activation = X_pair[:, concept_idx].mean().item()
-            print(f"      {idx:2d}. {concept_name:30s} (idx {concept_idx:3d}): entropy={entropy:.4f}, avg_activation={avg_activation:.4f}")
+            weight_t = W[t, concept_idx].item()
+            weight_q = W[q, concept_idx].item()
+            print(f"      {idx:2d}. {concept_name:30s} (idx {concept_idx:3d}): entropy={entropy:.4f}, avg_activation={avg_activation:.4f}, W[{t}]={weight_t:.4f}, W[{q}]={weight_q:.4f}")
         
         correct_indices = torch.nonzero((y == p) & (y == t), as_tuple=False).view(-1)
         if len(correct_indices) > 0:
