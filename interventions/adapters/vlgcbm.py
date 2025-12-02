@@ -6,8 +6,8 @@ from loguru import logger
 
 @dataclass
 class VLGCbmRun:
-    load_path: str     # e.g., /sc-cbint-vol/saved_models/vlg/cifar100
-    nec: int | None = None  # if None, you can refit; else load W_g@NEC=nec
+    load_path: str    
+    nec: int | None = None 
 
 def _load_split_tensors(run: VLGCbmRun, split: str, device="cpu"):
     fp = run.load_path

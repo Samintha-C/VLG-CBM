@@ -152,6 +152,7 @@ def main():
     logger.info("Starting Type-4 weight nudges...")
     logger.info("  Workflow: Find mistakes in Val → Apply interventions → Accept if val acc doesn't drop")
     logger.info("  Then evaluate on Test set (unseen) to check generalization")
+    logger.info("  Processing ALL misclassified samples (no limit)")
     
     # For weight nudges, CIS selector has interface limitations
     # weight_nudge_eval calls chosen_indices_fn(X, topk) without y_true/y_pred
@@ -164,9 +165,17 @@ def main():
     
     # Find mistakes in val set and apply interventions
     # Accept interventions only if val accuracy doesn't drop (prevents overfitting)
+    # Process ALL misclassified samples (sample_limit=None)
+    
+    # Count total misclassified samples before processing
+    logits_val = Xva @ W.T + b
+    pred_val = logits_val.argmax(1)
+    total_misclassified = (pred_val != yva).sum().item()
+    logger.info(f"Total misclassified samples in validation set: {total_misclassified}")
+    
     W2, b2, log = weight_nudge_eval(Xva, yva, Xva, yva, W, b, 
-                                     chosen_indices_fn=weight_nudge_selector, tau=args.tau_weight, sample_limit=1000)
-    logger.info(f"Type-4: Processed {len(log)} accepted edits out of 1000 attempts")
+                                     chosen_indices_fn=weight_nudge_selector, tau=args.tau_weight, sample_limit=None)
+    logger.info(f"Type-4: Accepted {len(log)} weight nudges out of {total_misclassified} misclassified samples")
     
     # Check val accuracy after interventions
     base_val_after = accuracy(Xva, yva, W2, b2)

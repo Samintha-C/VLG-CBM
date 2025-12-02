@@ -40,8 +40,8 @@ def main():
                         help="Budget constraint for concept overrides")
     parser.add_argument("--weight_tau", type=float, default=1e-2,
                         help="Budget constraint for weight nudges")
-    parser.add_argument("--sample_limit", type=int, default=1000,
-                        help="Limit number of samples for weight nudging")
+    parser.add_argument("--sample_limit", type=int, default=None,
+                        help="Limit number of samples for weight nudging (None = process all misclassified samples)")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory (default: auto-generated)")
     
@@ -172,6 +172,10 @@ def main():
     logger.info("TYPE-4 INTERVENTIONS (Weight Nudges)")
     logger.info("  Finding mistakes in validation set, applying weight nudges")
     logger.info("  Accepting nudges if validation accuracy doesn't drop")
+    if args.sample_limit is None:
+        logger.info("  Processing ALL misclassified samples (no limit)")
+    else:
+        logger.info(f"  Processing up to {args.sample_limit} misclassified samples")
     W_new, b_new, nudge_stats = weight_nudge_eval(
         X_train=Xva, y_train=yva, X_val=Xva, y_val=yva, W=W, b=b,
         chosen_indices_fn=selector,

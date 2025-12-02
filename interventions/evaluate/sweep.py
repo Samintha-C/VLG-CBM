@@ -92,17 +92,24 @@ def budget_curve_type3(X, y, W, b, selector_fn, topks=(1,3), tau=2.0):
     return out
 
 def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
-                      chosen_indices_fn, tau=1e-2, sample_limit=1000):
+                      chosen_indices_fn, tau=1e-2, sample_limit=None):
     """
-    Try nudges on a subset of misclassified train samples; accept if val acc doesn't drop.
+    Try nudges on misclassified train samples; accept if val acc doesn't drop.
     Returns possibly-updated W,b and a small log.
+    
+    Args:
+        sample_limit: Maximum number of samples to process. If None, processes all misclassified samples.
     """
     log = []
     logger.info("Finding misclassified train samples...")
     logits_train = X_train @ W.T + b
     pred_train = logits_train.argmax(1)
-    mis_idx = torch.nonzero(pred_train != y_train, as_tuple=False).view(-1)[:sample_limit]
-    logger.info(f"Found {len(mis_idx)} misclassified samples (limited to {sample_limit})")
+    mis_idx = torch.nonzero(pred_train != y_train, as_tuple=False).view(-1)
+    if sample_limit is not None:
+        mis_idx = mis_idx[:sample_limit]
+        logger.info(f"Found {len(torch.nonzero(pred_train != y_train, as_tuple=False).view(-1))} misclassified samples, processing {len(mis_idx)} (limited to {sample_limit})")
+    else:
+        logger.info(f"Found {len(mis_idx)} misclassified samples, processing all of them")
 
     W2, b2 = W.clone(), b.clone()
     base_val = accuracy(X_val, y_val, W2, b2)
