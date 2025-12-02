@@ -121,7 +121,13 @@ def weight_nudge_eval(X_train, y_train, X_val, y_val, W, b,
         if (idx + 1) % 100 == 0:
             logger.info(f"  Processed {idx+1}/{len(mis_idx)} samples, accepted {accepted} edits")
         t, p = int(y_train[i]), int(pred_train[i])
-        js = chosen_indices_fn(X_train[i:i+1], topk=1)[0].tolist()
+        # Call selector - it may accept (X, topk) or (X, W, y_true, y_pred, topk)
+        # We'll try the extended interface first (for CIS), then fall back to standard
+        try:
+            js = chosen_indices_fn(X_train[i:i+1], W, y_train[i:i+1], pred_train[i:i+1], topk=1)[0].tolist()
+        except TypeError:
+            # Standard interface: just (X, topk)
+            js = chosen_indices_fn(X_train[i:i+1], topk=1)[0].tolist()
         W_try, b_try = nudge_final_layer(W2, b2, X_train[i], t, p, js, tau=tau)
         new_val = accuracy(X_val, y_val, W_try, b_try)
         if new_val + 1e-6 >= base_val:

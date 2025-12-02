@@ -178,24 +178,30 @@ def main():
     logger.info("  Then evaluate on Test set (unseen) to check generalization")
     logger.info("  Processing ALL misclassified samples (no limit)")
     
-    # For weight nudges, CIS selector has interface limitations
-    # weight_nudge_eval calls chosen_indices_fn(X, topk) without y_true/y_pred
-    # So for CIS, we use entropy as fallback for weight nudges
-    if args.selector == "cis":
-        logger.info("Note: Using entropy selector for Type-4 weight nudges (CIS requires y_true/y_pred not available in this context)")
-        weight_nudge_selector = lambda X, topk: rank_uncertain_concepts(X, topk=topk, T=2.0)
-    else:
-        weight_nudge_selector = selector
-    
-    # Find mistakes in val set and apply interventions
-    # Accept interventions only if val accuracy doesn't drop (prevents overfitting)
-    # Process ALL misclassified samples (sample_limit=None)
-    
     # Count total misclassified samples before processing
     logits_val = Xva @ W.T + b
     pred_val = logits_val.argmax(1)
     total_misclassified = (pred_val != yva).sum().item()
     logger.info(f"Total misclassified samples in validation set: {total_misclassified}")
+    
+    # Create selector for weight nudges
+    # weight_nudge_eval now supports both interfaces:
+    #   - Standard: chosen_indices_fn(X, topk)
+    #   - Extended: chosen_indices_fn(X, W, y_true, y_pred, topk) for CIS
+    if args.selector == "cis":
+        logger.info("Using CIS selector for Type-4 weight nudges")
+        # Create a wrapper that accepts the extended interface (X, W, y_true, y_pred, topk)
+        def cis_selector_for_weight_nudges(X, W_arg=None, y_true=None, y_pred=None, topk=1):
+            # If called with extended interface (W_arg, y_true, y_pred provided)
+            if W_arg is not None and y_true is not None and y_pred is not None:
+                return rank_by_cis(X, W_arg, y_true, y_pred, topk=topk)
+            else:
+                # Fallback to entropy if called with standard interface
+                logger.warning("CIS selector called with standard interface, using entropy fallback")
+                return rank_uncertain_concepts(X, topk=topk, T=2.0)
+        weight_nudge_selector = cis_selector_for_weight_nudges
+    else:
+        weight_nudge_selector = selector
     
     W2, b2, log = weight_nudge_eval(Xva, yva, Xva, yva, W, b, 
                                      chosen_indices_fn=weight_nudge_selector, tau=args.tau_weight, sample_limit=None)
