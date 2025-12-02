@@ -1,7 +1,7 @@
 # interventions/cli/analyze_confusions.py
 import argparse, torch, os
 from pathlib import Path
-from ..adapters.vlgcbm import VLGCbmRun, get_loader, load_sparse_head, forward_final, confusion_matrix
+from ..adapters.vlgcbm import VLGCbmRun, load_sparse_head, forward_final, confusion_matrix
 from ..selectors.confusion import top_confusions, bucket_indices
 from ..selectors.cis import class_pair_impact
 
@@ -21,14 +21,25 @@ def main():
 
     run = VLGCbmRun(load_path=args.load_path, nec=args.nec)
     W, b, C = load_sparse_head(run, device=device)
-    loader = get_loader(run, args.split, batch_size=4096, device=device)
-
-    X_all, y_all = [], []
-    for X, y in loader:
-        X_all.append(X)
-        y_all.append(y)
-    X = torch.cat(X_all, dim=0)
-    y = torch.cat(y_all, dim=0)
+    
+    import os
+    from loguru import logger
+    fp = run.load_path
+    feat_path = os.path.join(fp, f"{args.split}_concept_features.pt")
+    label_path = os.path.join(fp, f"{args.split}_concept_labels.pt")
+    
+    if not os.path.exists(feat_path):
+        raise FileNotFoundError(f"Concept features not found: {feat_path}")
+    
+    print(f"Loading {args.split} split to {device}...")
+    X = torch.load(feat_path, map_location="cpu")
+    y = torch.load(label_path, map_location="cpu")
+    print(f"  Loaded X shape: {X.shape}, y shape: {y.shape} (on CPU)")
+    
+    if device != "cpu":
+        print(f"  Moving to {device}...")
+        X = X.to(device)
+        y = y.to(device)
 
     logits = forward_final(X, W, b)
     p = logits.argmax(1)
