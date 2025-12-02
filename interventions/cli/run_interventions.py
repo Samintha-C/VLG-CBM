@@ -65,8 +65,10 @@ def main():
     logger.info("  Test: Pure evaluation (unseen, not used in any intervention decisions) - on GPU")
     logger.info("="*70)
     
-    # For large datasets like ImageNet, keep train on CPU (we don't use it for interventions)
-    tr = get_loader(run, "train", batch_size=4096, device="cpu")
+    # Skip loading train set for large datasets (not used for interventions, saves memory)
+    # For ImageNet, train set is ~1.28M samples and causes OOM
+    logger.info("Skipping train set loading (not used for interventions, saves memory)")
+    
     va = get_loader(run, "val", batch_size=4096, device=device)
     
     # Try to load test set, but if it doesn't exist, we'll split val set
@@ -79,15 +81,12 @@ def main():
         has_test = False
 
     logger.info("Materializing tensors...")
-    if hasattr(tr.dataset, "tensors"):
-        Xtr, ytr = tr.dataset.tensors[0], tr.dataset.tensors[1]
+    if hasattr(va.dataset, "tensors"):
         Xva, yva = va.dataset.tensors[0], va.dataset.tensors[1]
         if has_test:
             Xte, yte = te.dataset.tensors[0], te.dataset.tensors[1]
     else:
         logger.info("Concatenating batches...")
-        Xtr = torch.cat([X for X,_ in tr], 0)
-        ytr = torch.cat([y for _,y in tr], 0)
         Xva = torch.cat([X for X,_ in va], 0)
         yva = torch.cat([y for _,y in va], 0)
         if has_test:
@@ -129,7 +128,6 @@ def main():
     else:
         logger.info("Using separate test set (not split from val)")
     
-    logger.info(f"Train: {Xtr.shape[0]} samples (on CPU, not used for interventions)")
     logger.info(f"Val: {Xva.shape[0]} samples (for interventions, on {device})")
     logger.info(f"Test: {Xte.shape[0]} samples (unseen, for evaluation only, on {device})")
     # Train stays on CPU (we don't use it), val and test are already on device from get_loader
