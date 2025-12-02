@@ -21,8 +21,32 @@ def main():
                     help="Concept selector: 'entropy' (UCP) or 'cis' (Class-Pair Impact Score)")
     args = ap.parse_args()
 
-    device = args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")
+    # Check CUDA availability with error handling
+    if args.device:
+        device = args.device
+    else:
+        try:
+            # Try to check CUDA availability, but handle initialization errors
+            if torch.cuda.is_available():
+                # Try to actually use CUDA to verify it works
+                try:
+                    _ = torch.zeros(1).cuda()
+                    device = "cuda"
+                except RuntimeError as e:
+                    logger.warning(f"CUDA check failed: {e}. Falling back to CPU.")
+                    device = "cpu"
+            else:
+                device = "cpu"
+        except Exception as e:
+            logger.warning(f"Error checking CUDA availability: {e}. Using CPU.")
+            device = "cpu"
+    
     logger.info(f"Using device: {device}")
+    if device != "cpu":
+        try:
+            logger.info(f"CUDA device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'}")
+        except:
+            pass
     logger.info(f"Load path: {args.load_path}, NEC: {args.nec}, Budget: {args.budget}")
 
     outdir = stamp_dir()

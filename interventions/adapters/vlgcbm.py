@@ -18,10 +18,29 @@ def _load_split_tensors(run: VLGCbmRun, split: str, device="cpu"):
             raise FileNotFoundError(f"Concept features not found: {feat_path}")
     
     logger.info(f"Loading {split} split: {os.path.basename(feat_path)} to {device}")
-    # Load directly to the specified device to avoid double memory usage
-    X = torch.load(feat_path, map_location=device)
-    y = torch.load(label_path, map_location=device)
-    logger.info(f"  Loaded X shape: {X.shape}, y shape: {y.shape}")
+    
+    # For large files (especially ImageNet), load to CPU first then move to device
+    # This is more reliable than direct map_location for very large tensors
+    # and avoids CUDA initialization/memory issues during deserialization
+    X = torch.load(feat_path, map_location="cpu")
+    y = torch.load(label_path, map_location="cpu")
+    logger.info(f"  Loaded X shape: {X.shape}, y shape: {y.shape} (on CPU)")
+    
+    # Move to target device if not CPU
+    if device != "cpu":
+        # Convert device string to torch.device for proper handling
+        torch_device = torch.device(device)
+        logger.info(f"  Moving tensors to {torch_device}...")
+        try:
+            X = X.to(torch_device)
+            y = y.to(torch_device)
+            logger.info(f"  Successfully moved to {torch_device}")
+        except RuntimeError as e:
+            logger.error(f"  Failed to move to {torch_device}: {e}")
+            logger.warning(f"  Keeping tensors on CPU. You may need to check CUDA availability/memory.")
+            # Keep on CPU if move fails
+            device = "cpu"
+    
     return X, y
 
 def get_loader(run: VLGCbmRun, split: str, batch_size=256, num_workers=2, shuffle=False, device="cpu"):
@@ -79,10 +98,27 @@ def load_sparse_head(run: VLGCbmRun, device="cuda"):
     w_path = os.path.join(fp, f"W_g@NEC={run.nec}.pt")
     b_path = os.path.join(fp, f"b_g@NEC={run.nec}.pt")
     logger.info(f"Loading sparse head: W from {os.path.basename(w_path)}, b from {os.path.basename(b_path)} to {device}")
-    W = torch.load(w_path, map_location=device)
-    b = torch.load(b_path, map_location=device)
+    
+    # Load to CPU first, then move to device (more reliable)
+    W = torch.load(w_path, map_location="cpu")
+    b = torch.load(b_path, map_location="cpu")
+    logger.info(f"  Loaded W shape: {W.shape}, b shape: {b.shape} (on CPU)")
+    
+    # Move to target device if not CPU
+    if device != "cpu":
+        torch_device = torch.device(device)
+        logger.info(f"  Moving sparse head to {torch_device}...")
+        try:
+            W = W.to(torch_device)
+            b = b.to(torch_device)
+            logger.info(f"  Successfully moved to {torch_device}")
+        except RuntimeError as e:
+            logger.error(f"  Failed to move to {torch_device}: {e}")
+            logger.warning(f"  Keeping sparse head on CPU. CUDA may not be available.")
+            device = "cpu"
+    
     C, D = W.shape
-    logger.info(f"  Loaded W shape: {W.shape}, b shape: {b.shape}, num_classes: {C}")
+    logger.info(f"  Final: W shape {W.shape}, b shape {b.shape}, num_classes: {C}")
     return W, b, C
 
 def forward_final(X, W, B):
